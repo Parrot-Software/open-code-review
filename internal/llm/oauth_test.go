@@ -44,11 +44,27 @@ func fakeCodexServer(mode string) {
 		if decoder.Decode(&p) != nil {
 			return
 		}
-		if p.Method == "" && (mode == "tool" || mode == "multi-tool") {
+		if p.Method == "" && (mode == "tool" || mode == "multi-tool" || mode == "sequential-tool") {
 			toolResults++
 			wantResults := 1
 			if mode == "multi-tool" {
 				wantResults = 2
+			}
+			if mode == "sequential-tool" {
+				wantResults = 2
+				wantID, wantText := `"server-call"`, "result-of-call-123"
+				if toolResults == 2 {
+					wantID, wantText = `"server-call-2"`, "result-of-call-456"
+				}
+				if string(p.ID) != wantID || !bytes.Contains(p.Result, []byte(wantText)) {
+					os.Exit(24)
+				}
+				// The second request is only issued after the first result arrives,
+				// so a replacement session would see call-123 requested again.
+				if toolResults == 1 {
+					_ = encoder.Encode(map[string]any{"id": "server-call-2", "method": "item/tool/call", "params": map[string]any{"callId": "call-456", "tool": "search_code", "arguments": map[string]any{"query": "providers"}}})
+					continue
+				}
 			}
 			if toolResults == wantResults {
 				notify("thread/tokenUsage/updated", map[string]any{"tokenUsage": map[string]any{"last": map[string]any{"inputTokens": 10, "outputTokens": 5, "cachedInputTokens": 3, "totalTokens": 15}}})
@@ -109,7 +125,7 @@ func fakeCodexServer(mode string) {
 				fmt.Fprintln(os.Stdout, "invalid-json")
 				return
 			}
-			if mode == "tool" || mode == "multi-tool" || mode == "unknown-tool" {
+			if mode == "tool" || mode == "multi-tool" || mode == "sequential-tool" || mode == "unknown-tool" {
 				name := "search_code"
 				if mode == "unknown-tool" {
 					name = "unavailable"
@@ -194,6 +210,44 @@ func TestCodexOAuthRoundTrip(t *testing.T) {
 				t.Fatalf("unexpected response: %+v", resp)
 			}
 		})
+	}
+}
+
+func TestCodexOAuthContinuesRetainedSession(t *testing.T) {
+	fakeOAuthExecutable(t, "sequential-tool")
+	tools := []ToolDef{{Function: FunctionDef{Name: "search_code", Parameters: map[string]any{"type": "object"}}}}
+	messages := []Message{{Role: "system", Content: "Review code"}, {Role: "user", Content: "Find bugs"}}
+	client := NewCodexOAuthClient(ClientConfig{Model: "test-model"})
+	var retained *codexSession
+	for _, wantID := range []string{"call-123", "call-456"} {
+		resp, err := client.CompletionsWithCtx(context.Background(), ChatRequest{Messages: messages, Tools: tools})
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls := resp.ToolCalls()
+		if len(calls) != 1 || calls[0].ID != wantID {
+			t.Fatalf("expected only %s from the retained turn, got %+v", wantID, calls)
+		}
+		client.mu.Lock()
+		session := client.sessions[wantID]
+		client.mu.Unlock()
+		if session == nil || (retained != nil && session != retained) {
+			t.Fatalf("expected %s to be retained on the original Codex session", wantID)
+		}
+		retained = session
+		messages = append(messages, Message{Role: "assistant", Content: resp.Content(), ToolCalls: calls}, Message{Role: "tool", ToolCallID: wantID, Content: "result-of-" + wantID})
+	}
+	resp, err := client.CompletionsWithCtx(context.Background(), ChatRequest{Messages: messages, Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content() != "review complete" || resp.Usage == nil || resp.Usage.TotalTokens != 15 {
+		t.Fatalf("unexpected final response: %+v", resp)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.sessions) != 0 || !retained.closed {
+		t.Fatal("expected the completed Codex session to be discarded")
 	}
 }
 

@@ -112,11 +112,26 @@ including experimental dynamic tools and history injection; use a current
 Codex CLI (tested with 0.159.2). It requires a ChatGPT login, even if API-key
 environment variables are set. Choose a model available to your account.
 
-OCR replays the complete conversation into a fresh ephemeral Codex thread for
-each completion. When Codex requests an OCR tool, OCR ends that subprocess,
-executes the tool through its existing agent loop, and replays the call and
-result on the next completion. Built-in Codex tools are disabled through empty
-environments and rejected if requested. Codex manages inference retries;
+When a completion has no retained Codex session to continue, OCR starts a new
+app-server subprocess, replays the complete conversation into a fresh
+ephemeral thread, and starts a turn. When Codex requests OCR tools, OCR
+returns those calls to its existing agent loop and retains the session: the
+subprocess, the open turn, and Codex's outstanding tool-call requests. The
+next completion continues that session when it carries results for those
+calls and otherwise matches the original request: the same model, tools, tool
+choice, and earlier messages, followed only by assistant tool-call messages
+and tool results for that session. OCR answers the outstanding requests with
+the results and keeps reading the same turn, which can request more tools
+(retaining the session again) or finish.
+
+OCR discards the session when the turn completes or fails, when a request is
+cancelled or reaches its timeout, when a completion carrying the session's
+tool results does not otherwise match, or when no follow-up arrives within
+the provider's request timeout (see [Timeouts](#timeouts)). A completion that
+cannot continue a session, including one whose session was already
+discarded, starts a new session with the full conversation replayed. Built-in
+Codex tools are disabled through empty environments and rejected if
+requested. Codex manages inference retries;
 OCR's HTTP retry/raw-capture middleware cannot observe that transport.
 Codex uses its own output-token budget; `ChatRequest.MaxTokens` does not impose
 a Codex token cap, and temperature overrides are rejected.
