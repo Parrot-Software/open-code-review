@@ -13,11 +13,8 @@ import (
 	"strings"
 )
 
-func oauthExecutable(protocol string) (string, error) {
-	name, env := "codex", "OCR_CODEX_PATH"
-	if protocol == ProtocolAnthropicOAuth {
-		name, env = "claude", "OCR_CLAUDE_PATH"
-	}
+func oauthExecutable() (string, error) {
+	name, env := "claude", "OCR_CLAUDE_PATH"
 	if path := strings.TrimSpace(os.Getenv(env)); path != "" {
 		name = path
 	}
@@ -28,17 +25,14 @@ func oauthExecutable(protocol string) (string, error) {
 	return filepath.Abs(path)
 }
 
-func oauthEnvironment(protocol string) []string {
-	blocked := map[string]bool{"OPENAI_API_KEY": true, "CODEX_API_KEY": true, "CODEX_ACCESS_TOKEN": true}
-	if protocol == ProtocolAnthropicOAuth {
-		blocked = map[string]bool{
-			"ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true,
-			"ANTHROPIC_BASE_URL": true, "CLAUDE_CODE_OAUTH_TOKEN": true,
-			"ANTHROPIC_CUSTOM_HEADERS": true, "CLAUDE_CODE_EXTRA_BODY": true,
-			"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR": true, "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR": true,
-			"CLAUDE_CODE_USE_BEDROCK": true, "CLAUDE_CODE_USE_VERTEX": true,
-			"CLAUDE_CODE_USE_FOUNDRY": true, "CLAUDE_CODE_SIMPLE": true,
-		}
+func oauthEnvironment() []string {
+	blocked := map[string]bool{
+		"ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true,
+		"ANTHROPIC_BASE_URL": true, "CLAUDE_CODE_OAUTH_TOKEN": true,
+		"ANTHROPIC_CUSTOM_HEADERS": true, "CLAUDE_CODE_EXTRA_BODY": true,
+		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR": true, "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR": true,
+		"CLAUDE_CODE_USE_BEDROCK": true, "CLAUDE_CODE_USE_VERTEX": true,
+		"CLAUDE_CODE_USE_FOUNDRY": true, "CLAUDE_CODE_SIMPLE": true,
 	}
 	var env []string
 	for _, entry := range os.Environ() {
@@ -50,38 +44,24 @@ func oauthEnvironment(protocol string) []string {
 	return env
 }
 
-func RunOAuthAuth(ctx context.Context, provider, action string, device bool, stdin io.Reader, stdout, stderr io.Writer) error {
+func RunOAuthAuth(ctx context.Context, provider, action string, stdin io.Reader, stdout, stderr io.Writer) error {
 	preset, ok := LookupProvider(provider)
 	if !ok || !IsOAuthProtocol(preset.Protocol) {
-		return fmt.Errorf("OAuth authentication supports codex-oauth and anthropic-oauth")
+		return fmt.Errorf("OAuth authentication supports anthropic-oauth")
 	}
 	if action != "login" && action != "status" && action != "logout" {
 		return fmt.Errorf("unsupported OAuth action %q", action)
 	}
-	if device && action != "login" {
-		return fmt.Errorf("--device is only supported for login")
-	}
-	if device && preset.Protocol == ProtocolAnthropicOAuth {
-		return fmt.Errorf("Claude Code does not provide a device login flag; run 'claude auth login --claudeai' and follow its URL/code instructions")
-	}
-	path, err := oauthExecutable(preset.Protocol)
+	path, err := oauthExecutable()
 	if err != nil {
 		return err
 	}
 	args := []string{"auth", action}
-	if preset.Protocol == ProtocolCodexOAuth {
-		args = []string{"-c", `forced_login_method="chatgpt"`, action}
-		if action == "status" {
-			args = append(args[:len(args)-1], "login", "status")
-		}
-		if device {
-			args = append(args, "--device-auth")
-		}
-	} else if action == "login" {
+	if action == "login" {
 		args = append(args, "--claudeai")
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = oauthEnvironment(preset.Protocol)
+	cmd.Env = oauthEnvironment()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s %s: %w", provider, action, err)

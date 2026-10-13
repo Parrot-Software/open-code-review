@@ -7,14 +7,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func init() {
@@ -27,145 +24,7 @@ func init() {
 			fakeClaudeClient(mode)
 			os.Exit(0)
 		}
-		fakeCodexServer(mode)
-		os.Exit(0)
-	}
-}
-
-func fakeCodexServer(mode string) {
-	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
-	toolResults := 0
-	respond := func(p codexPacket, result any) { _ = encoder.Encode(map[string]any{"id": p.ID, "result": result}) }
-	notify := func(method string, params any) {
-		_ = encoder.Encode(map[string]any{"method": method, "params": params})
-	}
-	notifyUsage := func(total, last map[string]any) {
-		notify("thread/tokenUsage/updated", map[string]any{"tokenUsage": map[string]any{"total": total, "last": last}})
-	}
-	firstUsage := map[string]any{"inputTokens": 10, "outputTokens": 5, "cachedInputTokens": 3, "totalTokens": 15}
-	for {
-		var p codexPacket
-		if decoder.Decode(&p) != nil {
-			return
-		}
-		if p.Method == "" && mode == "late-usage" {
-			// The first inference's usage arrives only after OCR has returned its
-			// tool call, and the final cumulative usage is published twice.
-			secondUsage := map[string]any{"inputTokens": 12, "outputTokens": 4, "cachedInputTokens": 6, "totalTokens": 16}
-			bothUsage := map[string]any{"inputTokens": 22, "outputTokens": 9, "cachedInputTokens": 9, "totalTokens": 31}
-			notifyUsage(firstUsage, firstUsage)
-			notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review complete", "phase": "final_answer"}})
-			notifyUsage(bothUsage, secondUsage)
-			notifyUsage(bothUsage, secondUsage)
-			notify("turn/completed", map[string]any{"turn": map[string]any{"status": "completed"}})
-			continue
-		}
-		if p.Method == "" && (mode == "tool" || mode == "multi-tool" || mode == "sequential-tool") {
-			toolResults++
-			wantResults := 1
-			if mode == "multi-tool" {
-				wantResults = 2
-			}
-			if mode == "sequential-tool" {
-				wantResults = 2
-				wantID, wantText := `"server-call"`, "result-of-call-123"
-				if toolResults == 2 {
-					wantID, wantText = `"server-call-2"`, "result-of-call-456"
-				}
-				if string(p.ID) != wantID || !bytes.Contains(p.Result, []byte(wantText)) {
-					os.Exit(24)
-				}
-				// The second request is only issued after the first result arrives,
-				// so a replacement session would see call-123 requested again.
-				if toolResults == 1 {
-					_ = encoder.Encode(map[string]any{"id": "server-call-2", "method": "item/tool/call", "params": map[string]any{"callId": "call-456", "tool": "search_code", "arguments": map[string]any{"query": "providers"}}})
-					continue
-				}
-			}
-			if toolResults == wantResults {
-				notifyUsage(firstUsage, firstUsage)
-				notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review complete", "phase": "final_answer"}})
-				notify("turn/completed", map[string]any{"turn": map[string]any{"status": "completed"}})
-			}
-			continue
-		}
-		switch p.Method {
-		case "initialize":
-			if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" {
-				os.Exit(20)
-			}
-			if mode == "rpc-error" {
-				_ = encoder.Encode(map[string]any{"id": p.ID, "error": map[string]any{"code": -1, "message": "test protocol error"}})
-				continue
-			}
-			respond(p, map[string]any{})
-		case "account/read":
-			typeName := "chatgpt"
-			if mode == "api-key" {
-				typeName = "apiKey"
-			}
-			respond(p, map[string]any{"account": map[string]any{"type": typeName}})
-		case "thread/start":
-			var args struct {
-				Ephemeral    bool   `json:"ephemeral"`
-				Sandbox      string `json:"sandbox"`
-				Environments []any  `json:"environments"`
-			}
-			_ = json.Unmarshal(p.Params, &args)
-			if !args.Ephemeral || args.Sandbox != "read-only" || len(args.Environments) != 0 {
-				os.Exit(21)
-			}
-			respond(p, map[string]any{"thread": map[string]any{"id": "thread-test"}})
-		case "thread/inject_items":
-			var history struct {
-				Items []map[string]any `json:"items"`
-			}
-			_ = json.Unmarshal(p.Params, &history)
-			for _, item := range history.Items {
-				if item["type"] == "message" {
-					if _, ok := item["content"].([]any); !ok {
-						os.Exit(23)
-					}
-				}
-			}
-			if mode == "replay" && (!bytes.Contains(p.Params, []byte("function_call_output")) || !bytes.Contains(p.Params, []byte("result-of-test-call"))) {
-				os.Exit(22)
-			}
-			respond(p, map[string]any{})
-		case "turn/start":
-			if mode == "timeout" {
-				time.Sleep(time.Minute)
-				return
-			}
-			if mode == "malformed" {
-				fmt.Fprintln(os.Stdout, "invalid-json")
-				return
-			}
-			if mode == "tool" || mode == "multi-tool" || mode == "sequential-tool" || mode == "late-usage" || mode == "unknown-tool" {
-				name := "search_code"
-				if mode == "unknown-tool" {
-					name = "unavailable"
-				}
-				_ = encoder.Encode(map[string]any{"id": "server-call", "method": "item/tool/call", "params": map[string]any{"callId": "call-123", "tool": name, "arguments": map[string]any{"query": "auth"}}})
-				if mode == "multi-tool" {
-					_ = encoder.Encode(map[string]any{"id": "server-call-2", "method": "item/tool/call", "params": map[string]any{"callId": "call-456", "tool": name, "arguments": map[string]any{"query": "providers"}}})
-				}
-				respond(p, map[string]any{"turn": map[string]any{"id": "turn-test"}})
-				continue
-			}
-			if mode == "builtin" {
-				notify("item/started", map[string]any{"item": map[string]any{"type": "commandExecution"}})
-			}
-			notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review progress", "phase": "commentary"}})
-			notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review complete", "phase": "final_answer"}})
-			notifyUsage(firstUsage, firstUsage)
-			respond(p, map[string]any{"turn": map[string]any{"id": "turn-test"}})
-			status := "completed"
-			if mode == "failed" {
-				status = "failed"
-			}
-			notify("turn/completed", map[string]any{"turn": map[string]any{"status": status}})
-		}
+		os.Exit(2)
 	}
 }
 
@@ -175,205 +34,37 @@ func fakeOAuthExecutable(t *testing.T, mode string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("OCR_CODEX_PATH", executable)
 	t.Setenv("OCR_CLAUDE_PATH", executable)
 	t.Setenv("OCR_TEST_OAUTH_CHILD", mode)
 }
 
-func TestCodexOAuthRoundTrip(t *testing.T) {
-	for _, mode := range []string{"text", "tool", "multi-tool", "replay"} {
-		t.Run(mode, func(t *testing.T) {
-			fakeOAuthExecutable(t, mode)
-			t.Setenv("OPENAI_API_KEY", "must-not-reach-codex")
-			t.Setenv("CODEX_API_KEY", "must-not-reach-codex")
-			req := ChatRequest{Messages: []Message{{Role: "system", Content: "Review code"}, {Role: "user", Content: "Find bugs"}}, Tools: []ToolDef{{Function: FunctionDef{Name: "search_code", Parameters: map[string]any{"type": "object"}}}}}
-			if mode == "replay" {
-				req.Messages = append(req.Messages, Message{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-123", Type: "function", Function: FunctionCall{Name: "search_code", Arguments: `{}`}}}}, Message{Role: "tool", ToolCallID: "call-123", Content: "result-of-test-call"})
-			}
-			client := NewCodexOAuthClient(ClientConfig{Model: "test-model"})
-			resp, err := client.CompletionsWithCtx(context.Background(), req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if mode == "tool" || mode == "multi-tool" {
-				calls := resp.ToolCalls()
-				wantCalls := 1
-				if mode == "multi-tool" {
-					wantCalls = 2
-				}
-				if len(calls) != wantCalls || calls[0].ID != "call-123" || calls[0].Function.Arguments != `{"query":"auth"}` {
-					t.Fatalf("unexpected tool calls: %+v", calls)
-				}
-				if mode == "multi-tool" {
-					if calls[1].ID != "call-456" || calls[1].Function.Arguments != `{"query":"providers"}` {
-						t.Fatalf("unexpected second tool call: %+v", resp)
-					}
-				}
-				toolResults := make([]Message, 0, len(calls)*2)
-				toolResults = append(toolResults, Message{Role: "assistant", Content: resp.Content(), ToolCalls: calls})
-				for _, call := range calls {
-					toolResults = append(toolResults, Message{Role: "tool", ToolCallID: call.ID, Content: "result-of-" + call.ID})
-				}
-				followup := ChatRequest{Messages: append(req.Messages, toolResults...), Tools: req.Tools}
-				next, err := client.CompletionsWithCtx(context.Background(), followup)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if next.Content() != "review complete" || next.Usage == nil || next.Usage.TotalTokens != 15 {
-					t.Fatalf("unexpected follow-up response: %+v", next)
-				}
-			} else if resp.Content() != "review complete" || resp.Usage == nil || resp.Usage.TotalTokens != 15 || resp.Usage.CacheReadTokens != 3 {
-				t.Fatalf("unexpected response: %+v", resp)
-			}
-		})
-	}
-}
-
-func TestCodexOAuthContinuesRetainedSession(t *testing.T) {
-	fakeOAuthExecutable(t, "sequential-tool")
-	tools := []ToolDef{{Function: FunctionDef{Name: "search_code", Parameters: map[string]any{"type": "object"}}}}
-	messages := []Message{{Role: "system", Content: "Review code"}, {Role: "user", Content: "Find bugs"}}
-	client := NewCodexOAuthClient(ClientConfig{Model: "test-model"})
-	var retained *codexSession
-	for _, wantID := range []string{"call-123", "call-456"} {
-		resp, err := client.CompletionsWithCtx(context.Background(), ChatRequest{Messages: messages, Tools: tools})
-		if err != nil {
-			t.Fatal(err)
-		}
-		calls := resp.ToolCalls()
-		if len(calls) != 1 || calls[0].ID != wantID {
-			t.Fatalf("expected only %s from the retained turn, got %+v", wantID, calls)
-		}
-		client.mu.Lock()
-		session := client.sessions[wantID]
-		client.mu.Unlock()
-		if session == nil || (retained != nil && session != retained) {
-			t.Fatalf("expected %s to be retained on the original Codex session", wantID)
-		}
-		retained = session
-		messages = append(messages, Message{Role: "assistant", Content: resp.Content(), ToolCalls: calls}, Message{Role: "tool", ToolCallID: wantID, Content: "result-of-" + wantID})
-	}
-	resp, err := client.CompletionsWithCtx(context.Background(), ChatRequest{Messages: messages, Tools: tools})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Content() != "review complete" || resp.Usage == nil || resp.Usage.TotalTokens != 15 {
-		t.Fatalf("unexpected final response: %+v", resp)
-	}
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if len(client.sessions) != 0 || !retained.closed {
-		t.Fatal("expected the completed Codex session to be discarded")
-	}
-}
-
-func TestCodexOAuthReportsUsagePublishedAfterToolCalls(t *testing.T) {
-	fakeOAuthExecutable(t, "late-usage")
-	req := ChatRequest{Messages: []Message{{Role: "system", Content: "Review code"}, {Role: "user", Content: "Find bugs"}}, Tools: []ToolDef{{Function: FunctionDef{Name: "search_code", Parameters: map[string]any{"type": "object"}}}}}
-	client := NewCodexOAuthClient(ClientConfig{Model: "test-model"})
-	resp, err := client.CompletionsWithCtx(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 || resp.Usage != nil {
-		t.Fatalf("unexpected tool-call response: %+v", resp)
-	}
-	req.Messages = append(req.Messages, Message{Role: "assistant", ToolCalls: calls}, Message{Role: "tool", ToolCallID: calls[0].ID, Content: "result-of-" + calls[0].ID})
-	final, err := client.CompletionsWithCtx(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := UsageInfo{PromptTokens: 22, CompletionTokens: 9, CacheReadTokens: 9, TotalTokens: 31}
-	if final.Usage == nil || *final.Usage != want {
-		t.Fatalf("usage = %+v, want both inferences counted once: %+v", final.Usage, want)
-	}
-}
-
-func TestCodexOAuthRequiresToolCallInEachCompletion(t *testing.T) {
-	fakeOAuthExecutable(t, "tool")
-	req := ChatRequest{Messages: []Message{{Role: "system", Content: "Review code"}, {Role: "user", Content: "Find bugs"}}, Tools: []ToolDef{{Function: FunctionDef{Name: "search_code", Parameters: map[string]any{"type": "object"}}}}, ToolChoice: "required"}
-	client := NewCodexOAuthClient(ClientConfig{Model: "test-model"})
-	resp, err := client.CompletionsWithCtx(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 {
-		t.Fatalf("unexpected first response: %+v", resp)
-	}
-	req.Messages = append(req.Messages, Message{Role: "assistant", ToolCalls: calls}, Message{Role: "tool", ToolCallID: calls[0].ID, Content: "result-of-" + calls[0].ID})
-	if _, err := client.CompletionsWithCtx(context.Background(), req); err == nil || !strings.Contains(err.Error(), "did not invoke the required OCR tool") {
-		t.Fatalf("retained text-only completion error = %v", err)
-	}
-}
-
-func TestCodexOAuthFailures(t *testing.T) {
-	for _, tc := range []struct{ mode, want string }{{"api-key", "ChatGPT account"}, {"rpc-error", "test protocol error"}, {"unknown-tool", "unavailable OCR tool"}, {"malformed", "decode Codex"}, {"builtin", "built-in tool"}, {"failed", "turn failed"}} {
-		t.Run(tc.mode, func(t *testing.T) {
-			fakeOAuthExecutable(t, tc.mode)
-			_, err := NewCodexOAuthClient(ClientConfig{}).CompletionsWithCtx(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "test"}}})
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("error = %v, want %s", err, tc.want)
-			}
-		})
-	}
-	for _, req := range []ChatRequest{{ToolChoice: "invalid"}, {ToolChoice: "required"}, {Temperature: new(float64)}} {
-		fakeOAuthExecutable(t, "text")
-		if _, err := NewCodexOAuthClient(ClientConfig{}).CompletionsWithCtx(context.Background(), req); err == nil {
-			t.Fatal("unsupported request succeeded")
-		}
-	}
-}
-
-func TestCodexOAuthCancellation(t *testing.T) {
-	fakeOAuthExecutable(t, "timeout")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	_, err := NewCodexOAuthClient(ClientConfig{}).CompletionsWithCtx(ctx, ChatRequest{})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestOfficialAuthCommands(t *testing.T) {
 	fakeOAuthExecutable(t, "auth")
-	for _, tc := range []struct {
-		provider, action, flag string
-		device                 bool
-	}{
-		{"codex-oauth", "login", "--device-auth", true}, {"codex-oauth", "status", "status", false}, {"codex-oauth", "logout", "logout", false},
-		{"anthropic-oauth", "login", "--claudeai", false}, {"anthropic-oauth", "status", "status", false}, {"anthropic-oauth", "logout", "logout", false},
-	} {
+	for action, flag := range map[string]string{"login": "--claudeai", "status": "status", "logout": "logout"} {
 		var output bytes.Buffer
-		if err := RunOAuthAuth(context.Background(), tc.provider, tc.action, tc.device, nil, &output, io.Discard); err != nil {
+		if err := RunOAuthAuth(context.Background(), ProtocolAnthropicOAuth, action, nil, &output, io.Discard); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(output.String(), tc.flag) {
-			t.Fatalf("args = %s, want %s", output.String(), tc.flag)
+		if !strings.Contains(output.String(), flag) {
+			t.Fatalf("args = %s, want %s", output.String(), flag)
 		}
 	}
-	for _, tc := range []struct {
-		provider, action string
-		device           bool
-	}{{"openai", "login", false}, {"codex-oauth", "invalid", false}, {"anthropic-oauth", "status", true}, {"anthropic-oauth", "login", true}} {
-		if RunOAuthAuth(context.Background(), tc.provider, tc.action, tc.device, nil, io.Discard, io.Discard) == nil {
-			t.Fatal("invalid auth command succeeded")
+	for _, tc := range []struct{ provider, action string }{{"openai", "login"}, {ProtocolAnthropicOAuth, "invalid"}} {
+		if RunOAuthAuth(context.Background(), tc.provider, tc.action, nil, io.Discard, io.Discard) == nil {
+			t.Fatalf("invalid auth command succeeded: %+v", tc)
 		}
 	}
-	t.Setenv("OCR_CODEX_PATH", filepath.Join(t.TempDir(), "missing"))
-	if RunOAuthAuth(context.Background(), "codex-oauth", "login", false, nil, io.Discard, io.Discard) == nil {
+	t.Setenv("OCR_CLAUDE_PATH", filepath.Join(t.TempDir(), "missing"))
+	if RunOAuthAuth(context.Background(), ProtocolAnthropicOAuth, "login", nil, io.Discard, io.Discard) == nil {
 		t.Fatal("missing executable accepted")
 	}
 }
 
 func TestAnthropicOAuthUsesSubscriptionLogin(t *testing.T) {
 	fakeOAuthExecutable(t, "auth")
-	executable, _ := os.Executable()
-	t.Setenv("OCR_CLAUDE_PATH", executable)
 	t.Setenv("OCR_ANT_PATH", filepath.Join(t.TempDir(), "must-not-use-console"))
 	var output bytes.Buffer
-	if err := RunOAuthAuth(context.Background(), "anthropic-oauth", "login", false, nil, &output, io.Discard); err != nil {
+	if err := RunOAuthAuth(context.Background(), ProtocolAnthropicOAuth, "login", nil, &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var args []string
@@ -386,58 +77,48 @@ func TestAnthropicOAuthUsesSubscriptionLogin(t *testing.T) {
 }
 
 func TestOAuthProviderResolution(t *testing.T) {
-	for _, name := range []string{"codex-oauth", "anthropic-oauth"} {
-		t.Run(name, func(t *testing.T) {
-			path := writeConfig(t, map[string]any{"provider": name, "model": "account-specific-model", "providers": map[string]any{name: map[string]any{}}})
-			ep, err := ResolveEndpoint(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !ep.AmbientAuth || ep.Token != "" || ep.Protocol != name {
-				t.Fatalf("endpoint = %+v", ep)
-			}
-			for _, field := range []string{"api_key", "api_key_cmd", "url", "auth_header"} {
-				path := writeConfig(t, map[string]any{"provider": name, "model": "test", "providers": map[string]any{name: map[string]any{field: "must-not-be-used"}}})
-				if _, err := ResolveEndpoint(path); err == nil || !strings.Contains(err.Error(), "official OAuth credentials") {
-					t.Fatalf("%s: error = %v", field, err)
-				}
-			}
-			t.Setenv("OCR_LLM_EXTRA_HEADERS", "Authorization=Bearer must-not-be-used")
-			for _, opts := range []ResolveOptions{{}, {Provider: name}} {
-				if _, err := ResolveEndpointWithOptions(path, opts); err == nil || !strings.Contains(err.Error(), "OCR_LLM_EXTRA_HEADERS") {
-					t.Fatalf("global OAuth header override error = %v", err)
-				}
-			}
-		})
+	name := ProtocolAnthropicOAuth
+	path := writeConfig(t, map[string]any{"provider": name, "model": "account-specific-model", "providers": map[string]any{name: map[string]any{}}})
+	ep, err := ResolveEndpoint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ep.AmbientAuth || ep.Token != "" || ep.Protocol != name {
+		t.Fatalf("endpoint = %+v", ep)
+	}
+	for _, field := range []string{"api_key", "api_key_cmd", "url", "auth_header"} {
+		path := writeConfig(t, map[string]any{"provider": name, "model": "test", "providers": map[string]any{name: map[string]any{field: "must-not-be-used"}}})
+		if _, err := ResolveEndpoint(path); err == nil || !strings.Contains(err.Error(), "official OAuth credentials") {
+			t.Fatalf("%s: error = %v", field, err)
+		}
+	}
+	t.Setenv("OCR_LLM_EXTRA_HEADERS", "Authorization=Bearer must-not-be-used")
+	for _, opts := range []ResolveOptions{{}, {Provider: name}} {
+		if _, err := ResolveEndpointWithOptions(path, opts); err == nil || !strings.Contains(err.Error(), "OCR_LLM_EXTRA_HEADERS") {
+			t.Fatalf("global OAuth header override error = %v", err)
+		}
 	}
 }
 
 func TestOAuthRelativeExecutableRoundTrip(t *testing.T) {
-	for _, tc := range []struct{ protocol, key, mode string }{
-		{ProtocolCodexOAuth, "OCR_CODEX_PATH", "text"},
-		{ProtocolAnthropicOAuth, "OCR_CLAUDE_PATH", "claude-text"},
-	} {
-		t.Run(tc.protocol, func(t *testing.T) {
-			fakeOAuthExecutable(t, tc.mode)
-			executable, err := os.Executable()
-			if err != nil {
-				t.Fatal(err)
-			}
-			dir := t.TempDir()
-			t.Chdir(dir)
-			relative, err := filepath.Rel(dir, executable)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv(tc.key, relative)
-			client := NewLLMClient(ResolvedEndpoint{Protocol: tc.protocol, Model: "test-model"}, nil, nil)
-			response, err := client.CompletionsWithCtx(context.Background(), claudeTestRequest())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if response.Content() != "review complete" {
-				t.Fatalf("unexpected response: %q", response.Content())
-			}
-		})
+	fakeOAuthExecutable(t, "claude-text")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	t.Chdir(dir)
+	relative, err := filepath.Rel(dir, executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCR_CLAUDE_PATH", relative)
+	client := NewLLMClient(ResolvedEndpoint{Protocol: ProtocolAnthropicOAuth, Model: "test-model"}, nil, nil)
+	response, err := client.CompletionsWithCtx(context.Background(), claudeTestRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content() != "review complete" {
+		t.Fatalf("unexpected response: %q", response.Content())
 	}
 }

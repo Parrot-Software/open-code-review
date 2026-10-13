@@ -51,7 +51,6 @@ ocr config set providers.anthropic.api_key sk-ant-xxxxxxxxxx
 | `anthropic` | anthropic | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
 | `bedrock` | anthropic-bedrock | определяется `aws_region` | — (цепочка учётных данных AWS) |
 | `chatgpt` | openai-responses | `https://api.openai.com/v1` | не применяется (Sign in with ChatGPT) |
-| `codex-oauth` | codex-oauth | управляется Codex app-server | ChatGPT OAuth |
 | `anthropic-oauth` | anthropic-oauth | управляется Claude Code | OAuth подписки Claude |
 | `openai` | openai | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
 | `openai-responses` | openai-responses | `https://api.openai.com/v1` | `OPENAI_RESPONSES_API_KEY` |

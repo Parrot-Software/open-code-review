@@ -77,7 +77,7 @@ func TestListProviders_Order(t *testing.T) {
 	if len(providers) < 3 {
 		t.Fatalf("expected at least 3 providers, got %d", len(providers))
 	}
-	expected := []string{"anthropic", "anthropic-oauth", "baidu-qianfan", "bedrock", "chatgpt", "codex-oauth", "dashscope", "dashscope-tokenplan", "deepseek", "edenai", "gemini", "hy-tokenplan", "iflytek", "kimi", "kimi-global", "litellm", "mimo", "minimax", "minimax-cn", "mistral", "novita", "ollama-cloud", "openai", "openai-responses", "openrouter", "siliconflow", "siliconflow-cn", "tencent-tokenhub", "volcengine", "xai", "z-ai", "z-ai-coding"}
+	expected := []string{"anthropic", "anthropic-oauth", "baidu-qianfan", "bedrock", "chatgpt", "dashscope", "dashscope-tokenplan", "deepseek", "edenai", "gemini", "hy-tokenplan", "iflytek", "kimi", "kimi-global", "litellm", "mimo", "minimax", "minimax-cn", "mistral", "novita", "ollama-cloud", "openai", "openai-responses", "openrouter", "siliconflow", "siliconflow-cn", "tencent-tokenhub", "volcengine", "xai", "z-ai", "z-ai-coding"}
 	if len(providers) != len(expected) {
 		t.Fatalf("expected %d providers, got %d", len(expected), len(providers))
 	}
@@ -454,33 +454,19 @@ func TestProviders_AllProtocolsCanonical(t *testing.T) {
 	}
 }
 
-func TestLookupProvider_OAuthDetails(t *testing.T) {
-	for name, models := range map[string][]string{
-		ProtocolCodexOAuth:     {"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"},
-		ProtocolAnthropicOAuth: {"sonnet", "opus", "claude-opus-5-5", "claude-sonnet-5-5"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			provider, ok := LookupProvider(name)
-			if !ok {
-				t.Fatalf("provider %q was not found", name)
-			}
-			if provider.Protocol != name || !provider.AmbientAuth || provider.BaseURL != "" || provider.EnvVar != "" || !slices.Equal(provider.Models, models) {
-				t.Fatalf("unexpected OAuth provider: %+v", provider)
-			}
-			for _, model := range provider.Models {
-				endpoint := ResolvedEndpoint{Protocol: provider.Protocol, Model: model, AmbientAuth: provider.AmbientAuth}
-				client := NewLLMClient(endpoint, nil, nil)
-				switch name {
-				case ProtocolCodexOAuth:
-					if _, ok := client.(*CodexOAuthClient); !ok {
-						t.Fatalf("model %q selected %T", model, client)
-					}
-				case ProtocolAnthropicOAuth:
-					if _, ok := client.(*ClaudeOAuthClient); !ok {
-						t.Fatalf("model %q selected %T", model, client)
-					}
-				}
-			}
-		})
+func TestLookupProvider_AnthropicOAuthDetails(t *testing.T) {
+	provider, ok := LookupProvider(ProtocolAnthropicOAuth)
+	if !ok {
+		t.Fatalf("provider %q was not found", ProtocolAnthropicOAuth)
+	}
+	models := []string{"sonnet", "opus", "claude-opus-5-5", "claude-sonnet-5-5"}
+	if provider.Protocol != ProtocolAnthropicOAuth || !provider.AmbientAuth || provider.BaseURL != "" || provider.EnvVar != "" || !slices.Equal(provider.Models, models) {
+		t.Fatalf("unexpected OAuth provider: %+v", provider)
+	}
+	for _, model := range provider.Models {
+		client := NewLLMClient(ResolvedEndpoint{Protocol: provider.Protocol, Model: model, AmbientAuth: provider.AmbientAuth}, nil, nil)
+		if _, ok := client.(*ClaudeOAuthClient); !ok {
+			t.Fatalf("model %q selected %T", model, client)
+		}
 	}
 }

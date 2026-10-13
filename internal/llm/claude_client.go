@@ -79,11 +79,11 @@ func (c *ClaudeOAuthClient) CompletionsWithCtx(ctx context.Context, req ChatRequ
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
-	path, err := oauthExecutable(ProtocolAnthropicOAuth)
+	path, err := oauthExecutable()
 	if err != nil {
 		return nil, err
 	}
-	env := oauthEnvironment(ProtocolAnthropicOAuth)
+	env := oauthEnvironment()
 	if err := claudeSubscriptionStatus(ctx, path, env); err != nil {
 		return nil, err
 	}

@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -58,7 +57,7 @@ func TestAuthRejectsUnsupportedProviderWithoutAccountFlags(t *testing.T) {
 	if err := validateAuthProvider(); err == nil || !strings.Contains(err.Error(), "expected chatgpt") {
 		t.Fatalf("validateAuthProvider = %v", err)
 	}
-	authProvider = "codex-oauth"
+	authProvider = "anthropic-oauth"
 	if err := validateAuthProvider(); err == nil || !strings.Contains(err.Error(), "official CLI") {
 		t.Fatalf("validateAuthProvider = %v", err)
 	}
@@ -96,25 +95,20 @@ func executeAuthCommand(t *testing.T, args ...string) error {
 	return rootCmd.Execute()
 }
 
-func TestAuthOfficialProvidersUseTheirCLI(t *testing.T) {
+func TestAuthAnthropicOAuthUsesClaudeCode(t *testing.T) {
 	old := runOfficialAuth
 	t.Cleanup(func() { runOfficialAuth = old })
 	var got []string
-	runOfficialAuth = func(_ context.Context, provider, action string, device bool, _ io.Reader, _, _ io.Writer) error {
-		got = append(got, fmt.Sprintf("%s %s %t", provider, action, device))
+	runOfficialAuth = func(_ context.Context, provider, action string, _ io.Reader, _, _ io.Writer) error {
+		got = append(got, provider+" "+action)
 		return nil
 	}
-	for _, args := range [][]string{
-		{"auth", "login", "--provider", "codex-oauth", "--device"},
-		{"auth", "login", "--provider", "anthropic-oauth"},
-		{"auth", "status", "--provider", "anthropic-oauth"},
-		{"auth", "logout", "--provider", "codex-oauth"},
-	} {
-		if err := executeAuthCommand(t, args...); err != nil {
-			t.Fatalf("%v: %v", args, err)
+	for _, action := range []string{"login", "status", "logout"} {
+		if err := executeAuthCommand(t, "auth", action, "--provider", "anthropic-oauth"); err != nil {
+			t.Fatalf("%s: %v", action, err)
 		}
 	}
-	want := []string{"codex-oauth login true", "anthropic-oauth login false", "anthropic-oauth status false", "codex-oauth logout false"}
+	want := []string{"anthropic-oauth login", "anthropic-oauth status", "anthropic-oauth logout"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("official auth calls = %q, want %q", got, want)
 	}
@@ -123,20 +117,21 @@ func TestAuthOfficialProvidersUseTheirCLI(t *testing.T) {
 	}
 }
 
-func TestAuthOfficialProvidersRejectChatGPTFlags(t *testing.T) {
+func TestAuthAnthropicOAuthRejectsChatGPTFlags(t *testing.T) {
 	old := runOfficialAuth
 	t.Cleanup(func() { runOfficialAuth = old })
-	runOfficialAuth = func(context.Context, string, string, bool, io.Reader, io.Writer, io.Writer) error {
-		t.Fatal("official CLI ran with a ChatGPT-only flag")
+	runOfficialAuth = func(context.Context, string, string, io.Reader, io.Writer, io.Writer) error {
+		t.Fatal("Claude Code ran with a ChatGPT-only flag")
 		return nil
 	}
 	for _, args := range [][]string{
-		{"auth", "login", "--provider", "codex-oauth", "--enable-plan"},
+		{"auth", "login", "--provider", "anthropic-oauth", "--enable-plan"},
 		{"auth", "login", "--provider", "anthropic-oauth", "--no-browser"},
-		{"auth", "login", "--provider", "codex-oauth", "--new-account"},
-		{"auth", "status", "--provider", "codex-oauth", "--account", "oaiapp_one"},
+		{"auth", "login", "--provider", "anthropic-oauth", "--device"},
+		{"auth", "login", "--provider", "anthropic-oauth", "--new-account"},
+		{"auth", "status", "--provider", "anthropic-oauth", "--account", "oaiapp_one"},
 	} {
-		if err := executeAuthCommand(t, args...); err == nil || !strings.Contains(err.Error(), "applies only to --provider chatgpt") {
+		if err := executeAuthCommand(t, args...); err == nil || !strings.Contains(err.Error(), "is not supported for --provider anthropic-oauth") {
 			t.Fatalf("%v: error = %v", args, err)
 		}
 	}

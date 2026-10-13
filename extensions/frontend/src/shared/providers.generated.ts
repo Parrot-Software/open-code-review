@@ -83,19 +83,6 @@ export const PROVIDER_PRESETS: OcrProviderPreset[] = [
     "models": []
   },
   {
-    "name": "codex-oauth",
-    "displayName": "OpenAI Codex (ChatGPT OAuth)",
-    "protocol": "codex-oauth",
-    "baseUrl": "",
-    "envVar": "",
-    "ambientAuth": true,
-    "models": [
-      "gpt-6.1-sol",
-      "gpt-6-sol",
-      "gpt-5.6-sol"
-    ]
-  },
-  {
     "name": "dashscope",
     "displayName": "Alibaba DashScope API",
     "protocol": "openai",

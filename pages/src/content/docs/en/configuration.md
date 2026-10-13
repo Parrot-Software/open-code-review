@@ -40,16 +40,15 @@ ocr config set providers.anthropic.api_key sk-ant-xxxxxxxxxx
 The following providers ship with OCR, with the Base URL and protocol
 preset. Most require an API key. If `providers.<name>.api_key` is unset,
 OCR falls back to the corresponding environment variable. The `chatgpt`
-provider instead uses the ChatGPT credentials created by `ocr auth login`,
-and `codex-oauth` and `anthropic-oauth` use the login of their official CLI
-(see [Official OAuth providers](#official-oauth-providers)).
+provider instead uses the ChatGPT credentials created by `ocr auth login`, and
+`anthropic-oauth` uses the Claude Code CLI login (see
+[Claude subscription provider](#claude-subscription-provider)).
 
 | Name | Protocol | Base URL | API key env var |
 |---|---|---|---|
 | `anthropic` | anthropic | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
 | `bedrock` | anthropic-bedrock | derived from `aws_region` | — (AWS credential chain) |
 | `chatgpt` | openai-responses | `https://api.openai.com/v1` | not applicable (Sign in with ChatGPT) |
-| `codex-oauth` | codex-oauth | managed by Codex app-server | ChatGPT OAuth |
 | `anthropic-oauth` | anthropic-oauth | managed by Claude Code | Claude subscription OAuth |
 | `openai` | openai | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
 | `openai-responses` | openai-responses | `https://api.openai.com/v1` | `OPENAI_RESPONSES_API_KEY` |
@@ -116,60 +115,13 @@ The configured `url` takes precedence over the preset Base URL. When
 `providers.<name>.url` is unset (or cleared), OCR falls back to the
 preset default — so you only need to set it when your endpoint differs.
 
-### Official OAuth providers
+### Claude subscription provider
 
-OAuth credentials stay in the provider's official credential store. OCR saves
-the provider and model selection and lets the official runtime refresh
-credentials. The provider picker skips API-key entry for these providers.
-`ocr auth` defaults to the `chatgpt` provider, so select these providers with
-`--provider`. The ChatGPT registration flags `--account`, `--new-account`,
-`--enable-plan` and `--no-browser` are rejected for them.
-
-For **Codex with a ChatGPT account**, install the
-[official Codex CLI](https://learn.chatgpt.com/docs/quickstart), then run:
-
-```bash
-ocr auth login --provider codex-oauth
-ocr config set provider codex-oauth
-ocr config set providers.codex-oauth.model gpt-6.1-sol
-ocr llm test
-```
-
-Use `ocr auth login --provider codex-oauth --device` for device authentication.
-Unlike the `chatgpt` preview, which signs in through OCR's own Sign in with
-ChatGPT flow and calls the public Responses API, `codex-oauth` reuses the
-Codex CLI login and runs requests through Codex.
-`OCR_CODEX_PATH` can select an absolute Codex executable path. OCR uses the
-[official app-server protocol](https://learn.chatgpt.com/docs/app-server),
-including experimental dynamic tools and history injection; use a current
-Codex CLI (tested with 0.159.2). It requires a ChatGPT login, even if API-key
-environment variables are set. Choose a model available to your account.
-
-When a completion has no retained Codex session to continue, OCR starts a new
-app-server subprocess, replays the complete conversation into a fresh
-ephemeral thread, and starts a turn. When Codex requests OCR tools, OCR
-returns those calls to its existing agent loop and retains the session: the
-subprocess, the open turn, and Codex's outstanding tool-call requests. The
-next completion continues that session when it carries results for those
-calls and otherwise matches the original request: the same model, tools, tool
-choice, and earlier messages, followed only by assistant tool-call messages
-and tool results for that session. OCR answers the outstanding requests with
-the results and keeps reading the same turn, which can request more tools
-(retaining the session again) or finish.
-
-OCR discards the session when the turn completes or fails, when a request is
-cancelled or reaches its timeout, when a completion carrying the session's
-tool results does not otherwise match, or when no follow-up arrives within
-the provider's request timeout (see [Timeouts](#timeouts)). A completion that
-cannot continue a session, including one whose session was already
-discarded, starts a new session with the full conversation replayed. Built-in
-Codex tools are disabled through empty environments and rejected if
-requested. Codex manages inference retries;
-OCR's HTTP retry/raw-capture middleware cannot observe that transport.
-Codex uses its own output-token budget; `ChatRequest.MaxTokens` does not impose
-a Codex token cap, and temperature overrides are rejected.
-
-For **Claude with a Claude / Claude Code subscription**, install the
+The `anthropic-oauth` provider uses a Claude or Claude Code subscription
+through the official Claude Code CLI. Credentials stay in Claude Code's
+credential store: OCR saves only the provider and model selection, and Claude
+Code refreshes credentials. The provider picker skips API-key entry for this
+provider. Install the
 [official Claude Code CLI](https://code.claude.com/docs/en/setup), then run:
 
 ```bash
@@ -179,14 +131,16 @@ ocr config set providers.anthropic-oauth.model sonnet
 ocr llm test
 ```
 
+`ocr auth` defaults to the `chatgpt` provider, so pass
+`--provider anthropic-oauth`. The ChatGPT flags `--account`, `--new-account`,
+`--enable-plan`, `--no-browser` and `--device` are rejected for this provider.
 Login delegates to `claude auth login --claudeai`; an existing Claude Code
 subscription login is reused. `OCR_CLAUDE_PATH` can select an absolute Claude
 executable path, and `CLAUDE_CONFIG_DIR` selects its configuration directory.
-Claude Code owns authentication and credential refresh. API-key, static token,
-and third-party endpoint environment variables do not override this provider.
-`--device` applies only to Codex: Claude Code has no device login flag, so
-follow the URL/code instructions from its normal login command when browser
-launch is unavailable.
+API-key, static token, and third-party endpoint environment variables do not
+override this provider. Claude Code has no device login flag; follow the
+URL/code instructions from its normal login command when browser launch is
+unavailable.
 
 OCR uses the documented
 [print-mode subprocess interface](https://code.claude.com/docs/en/headless)
@@ -207,19 +161,19 @@ says SDK, `claude -p`, and third-party app usage continue to draw from
 subscription limits. Account access and organization policy determine which
 models are available. Choose `sonnet`, `opus`, or an account-supported model ID.
 
-Use `ocr auth status --provider <provider>` and
-`ocr auth logout --provider <provider>` to inspect or clear the official login. These commands operate on the provider's selected
-credential store, which is also shared with its CLI. Authentication status
-reports the local login; it is not a connectivity test.
-Use `ocr llm test` to verify inference. Login commands require user interaction;
-OCR never opens a login during a review.
+Use `ocr auth status --provider anthropic-oauth` and
+`ocr auth logout --provider anthropic-oauth` to inspect or clear the Claude Code
+login. These commands operate on Claude Code's selected credential store, which
+is shared with the CLI. Authentication status reports the local login; it is
+not a connectivity test. Use `ocr llm test` to verify inference. Login
+commands require user interaction; OCR never opens a login during a review.
 
-OAuth providers require provider configuration; `OCR_LLM_PROTOCOL` and the
-legacy `llm.protocol` URL/token path cannot select them. API-key, credential
+This provider requires provider configuration; `OCR_LLM_PROTOCOL` and the
+legacy `llm.protocol` URL/token path cannot select it. API-key, credential
 command, URL, authentication-header, extra-body/header, and retry-code
-overrides are rejected for OAuth providers. These integrations use a local
-official CLI and interactive account login. Use API-key or federated providers
-when your deployment needs unattended service credentials.
+overrides are rejected. The integration uses a local official CLI and
+interactive account login. Use API-key or federated providers when your
+deployment needs unattended service credentials.
 
 ### AWS Bedrock
 

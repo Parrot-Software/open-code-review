@@ -3,17 +3,17 @@
 
 import { PROVIDER_PRESETS as generatedPresets } from '../providers.generated';
 import { isPresetProvider, lookupPreset, mergeModelLists, PROVIDER_PRESETS, usesAmbientAuth } from '../providers';
+import { buildOfficialSaveEntries, detectInitialTab, isConfigReady } from '../configUtils';
+import { OcrConfig } from '../types';
 
-test.each(['codex-oauth', 'anthropic-oauth'])('%s uses official ambient OAuth credentials', (name) => {
-  const preset = lookupPreset(name)!;
+test('anthropic-oauth uses official ambient OAuth credentials', () => {
+  const preset = lookupPreset('anthropic-oauth')!;
   expect(preset.ambientAuth).toBe(true);
   expect(usesAmbientAuth(preset)).toBe(true);
-  expect(usesAmbientAuth(preset, name)).toBe(true);
+  expect(usesAmbientAuth(preset, 'anthropic-oauth')).toBe(true);
   expect(usesAmbientAuth(preset, 'openai')).toBe(false);
   expect(preset.envVar).toBe('');
 });
-import { buildOfficialSaveEntries, detectInitialTab, isConfigReady } from '../configUtils';
-import { OcrConfig } from '../types';
 
 describe('generated provider presets', () => {
   it('keeps providers sorted by name with the existing initial provider', () => {

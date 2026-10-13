@@ -617,13 +617,11 @@ ocr llm models
 
 `ocr auth` accepts `--provider chatgpt` and `--account <client-id>`; `login` also accepts `--no-browser`, `--new-account` and `--enable-plan`. ChatGPT does not support `--device`. `--enable-plan` requests consent for a saved registration and cannot be combined with `--new-account`. The model list is account-specific; an explicit model is accepted even if the list omits it. This provider accepts `extra_body` only for `reasoning`, `text` and `prompt_cache_key`. See the [ChatGPT preview guide](../chatgpt-preview/) for account handling, permissions and restrictions.
 
-`--provider codex-oauth` and `--provider anthropic-oauth` delegate `login`, `status` and `logout` to the official Codex or Claude Code CLI, which owns the credential store. `login --device` uses Codex device authentication; Claude Code has no device login flag. The ChatGPT registration flags and `ocr auth select` do not apply to these providers. See [Official OAuth providers](../configuration/#official-oauth-providers).
+`--provider anthropic-oauth` delegates `login`, `status` and `logout` to the official Claude Code CLI, which owns the credential store. The ChatGPT flags (`--account`, `--new-account`, `--enable-plan`, `--no-browser` and `--device`) and `ocr auth select` do not apply to it. See [Claude subscription provider](../configuration/#claude-subscription-provider).
 
 ```bash
-ocr auth login --provider codex-oauth
-ocr auth login --provider codex-oauth --device
 ocr auth login --provider anthropic-oauth
-ocr auth status --provider codex-oauth
+ocr auth status --provider anthropic-oauth
 ocr auth logout --provider anthropic-oauth
 ```
 

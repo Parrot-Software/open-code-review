@@ -412,9 +412,9 @@ function OfficialForm({ wide, config, connTest, onBack, onTest, onSave }: FormPr
         )}
       </FormItem>
 
-      {(resolvedProtocol === 'codex-oauth' || resolvedProtocol === 'anthropic-oauth') && (
-        <FormItem label="OAuth sign-in" hint={`Run ocr auth login --provider ${resolvedProtocol} in a terminal on the machine running OCR.`}>
-          <span>{resolvedProtocol === 'anthropic-oauth' ? 'Uses your local Claude Code CLI and Claude subscription login.' : 'Uses your ChatGPT account and Codex access.'}</span>
+      {resolvedProtocol === 'anthropic-oauth' && (
+        <FormItem label="OAuth sign-in" hint="Run ocr auth login --provider anthropic-oauth in a terminal on the machine running OCR.">
+          <span>Uses your local Claude Code CLI and Claude subscription login.</span>
         </FormItem>
       )}
       {!ambientAuth && (

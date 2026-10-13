@@ -35,7 +35,6 @@ const (
 	// official SDK's bedrock middleware performs that rewriting, so this
 	// shares the Anthropic client rather than reimplementing the protocol.
 	ProtocolAnthropicBedrock = "anthropic-bedrock"
-	ProtocolCodexOAuth       = "codex-oauth"
 	ProtocolAnthropicOAuth   = "anthropic-oauth"
 )
 
@@ -57,8 +56,6 @@ func NormalizeProtocol(raw string) string {
 		return ProtocolOpenAIResponses
 	case ProtocolAnthropicBedrock:
 		return ProtocolAnthropicBedrock
-	case ProtocolCodexOAuth:
-		return ProtocolCodexOAuth
 	case ProtocolAnthropicOAuth:
 		return ProtocolAnthropicOAuth
 	default:
@@ -70,15 +67,15 @@ func NormalizeProtocol(raw string) string {
 // everything else.
 func ValidateProtocol(p string) error {
 	switch p {
-	case ProtocolAnthropic, ProtocolOpenAIChatCompletions, ProtocolOpenAIResponses, ProtocolAnthropicBedrock, ProtocolCodexOAuth, ProtocolAnthropicOAuth:
+	case ProtocolAnthropic, ProtocolOpenAIChatCompletions, ProtocolOpenAIResponses, ProtocolAnthropicBedrock, ProtocolAnthropicOAuth:
 		return nil
 	default:
-		return fmt.Errorf("unsupported protocol %q; supported protocols are %q, %q, %q, %q, %q, %q", p, ProtocolAnthropic, ProtocolOpenAIChatCompletions, ProtocolOpenAIResponses, ProtocolAnthropicBedrock, ProtocolCodexOAuth, ProtocolAnthropicOAuth)
+		return fmt.Errorf("unsupported protocol %q; supported protocols are %q, %q, %q, %q, %q", p, ProtocolAnthropic, ProtocolOpenAIChatCompletions, ProtocolOpenAIResponses, ProtocolAnthropicBedrock, ProtocolAnthropicOAuth)
 	}
 }
 
 func IsOAuthProtocol(protocol string) bool {
-	return protocol == ProtocolCodexOAuth || protocol == ProtocolAnthropicOAuth
+	return protocol == ProtocolAnthropicOAuth
 }
 
 func usesAmbientAuth(protocol string) bool {
