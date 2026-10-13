@@ -283,13 +283,13 @@ func TestOfficialAuthCommands(t *testing.T) {
 	fakeOAuthExecutable(t, "auth")
 	for _, tc := range []struct {
 		provider, action, flag string
-		headless               bool
+		device                 bool
 	}{
 		{"codex-oauth", "login", "--device-auth", true}, {"codex-oauth", "status", "status", false}, {"codex-oauth", "logout", "logout", false},
 		{"anthropic-oauth", "login", "--claudeai", false}, {"anthropic-oauth", "status", "status", false}, {"anthropic-oauth", "logout", "logout", false},
 	} {
 		var output bytes.Buffer
-		if err := RunOAuthAuth(context.Background(), tc.provider, tc.action, tc.headless, nil, &output, io.Discard); err != nil {
+		if err := RunOAuthAuth(context.Background(), tc.provider, tc.action, tc.device, nil, &output, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(output.String(), tc.flag) {
@@ -298,9 +298,9 @@ func TestOfficialAuthCommands(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		provider, action string
-		headless         bool
+		device           bool
 	}{{"openai", "login", false}, {"codex-oauth", "invalid", false}, {"anthropic-oauth", "status", true}, {"anthropic-oauth", "login", true}} {
-		if RunOAuthAuth(context.Background(), tc.provider, tc.action, tc.headless, nil, io.Discard, io.Discard) == nil {
+		if RunOAuthAuth(context.Background(), tc.provider, tc.action, tc.device, nil, io.Discard, io.Discard) == nil {
 			t.Fatal("invalid auth command succeeded")
 		}
 	}

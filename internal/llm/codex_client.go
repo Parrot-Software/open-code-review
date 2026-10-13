@@ -332,7 +332,7 @@ func (c *CodexOAuthClient) startSession(ctx context.Context, req ChatRequest, mo
 		return fail(err)
 	}
 	if account.Account == nil || account.Account.Type != "chatgpt" {
-		return fail(fmt.Errorf("Codex OAuth requires a ChatGPT account; run 'ocr auth login codex-oauth'"))
+		return fail(fmt.Errorf("Codex OAuth requires a ChatGPT account; run 'ocr auth login --provider codex-oauth'"))
 	}
 	if req.ToolChoice == "required" && len(req.Tools) == 0 {
 		return fail(fmt.Errorf("Codex tool_choice required needs at least one tool"))

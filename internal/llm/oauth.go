@@ -50,7 +50,7 @@ func oauthEnvironment(protocol string) []string {
 	return env
 }
 
-func RunOAuthAuth(ctx context.Context, provider, action string, headless bool, stdin io.Reader, stdout, stderr io.Writer) error {
+func RunOAuthAuth(ctx context.Context, provider, action string, device bool, stdin io.Reader, stdout, stderr io.Writer) error {
 	preset, ok := LookupProvider(provider)
 	if !ok || !IsOAuthProtocol(preset.Protocol) {
 		return fmt.Errorf("OAuth authentication supports codex-oauth and anthropic-oauth")
@@ -58,11 +58,11 @@ func RunOAuthAuth(ctx context.Context, provider, action string, headless bool, s
 	if action != "login" && action != "status" && action != "logout" {
 		return fmt.Errorf("unsupported OAuth action %q", action)
 	}
-	if headless && action != "login" {
-		return fmt.Errorf("--headless is only supported for login")
+	if device && action != "login" {
+		return fmt.Errorf("--device is only supported for login")
 	}
-	if headless && preset.Protocol == ProtocolAnthropicOAuth {
-		return fmt.Errorf("Claude Code does not provide a headless login flag; run 'claude auth login --claudeai' and follow its URL/code instructions")
+	if device && preset.Protocol == ProtocolAnthropicOAuth {
+		return fmt.Errorf("Claude Code does not provide a device login flag; run 'claude auth login --claudeai' and follow its URL/code instructions")
 	}
 	path, err := oauthExecutable(preset.Protocol)
 	if err != nil {
@@ -74,7 +74,7 @@ func RunOAuthAuth(ctx context.Context, provider, action string, headless bool, s
 		if action == "status" {
 			args = append(args[:len(args)-1], "login", "status")
 		}
-		if headless {
+		if device {
 			args = append(args, "--device-auth")
 		}
 	} else if action == "login" {

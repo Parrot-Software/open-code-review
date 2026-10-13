@@ -38,14 +38,17 @@ ocr config set providers.anthropic.api_key sk-ant-xxxxxxxxxx
 ### Built-in providers
 
 The following providers ship with OCR, with the Base URL and protocol
-preset — once selected, you only need to fill in the API key. If
-`providers.<name>.api_key` is unset, OCR falls back to the corresponding
-environment variable.
+preset. Most require an API key. If `providers.<name>.api_key` is unset,
+OCR falls back to the corresponding environment variable. The `chatgpt`
+provider instead uses the ChatGPT credentials created by `ocr auth login`,
+and `codex-oauth` and `anthropic-oauth` use the login of their official CLI
+(see [Official OAuth providers](#official-oauth-providers)).
 
 | Name | Protocol | Base URL | API key env var |
 |---|---|---|---|
 | `anthropic` | anthropic | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
 | `bedrock` | anthropic-bedrock | derived from `aws_region` | — (AWS credential chain) |
+| `chatgpt` | openai-responses | `https://api.openai.com/v1` | not applicable (Sign in with ChatGPT) |
 | `codex-oauth` | codex-oauth | managed by Codex app-server | ChatGPT OAuth |
 | `anthropic-oauth` | anthropic-oauth | managed by Claude Code | Claude subscription OAuth |
 | `openai` | openai | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
@@ -71,12 +74,36 @@ environment variable.
 | `novita` | openai | `https://api.novita.ai/openai` | `NOVITA_API_KEY` |
 | `xai` | openai | `https://api.x.ai/v1` | `XAI_API_KEY` |
 
+Built-in providers' model lists are suggestions for `ocr config model`, not
+restrictions on `--model`. An override absent from both the built-in list and
+`providers.<name>.models` produces a warning on stderr; the provider validates
+the model when the request is sent. Custom providers retain their existing
+`--model` validation rules.
+
+## Sign in with ChatGPT preview
+
+This preview adds the `chatgpt` built-in provider for the public Responses API. It has no API-key environment variable. See the [ChatGPT preview guide](../chatgpt-preview/) for sign-in, consent and usage restrictions.
+
+Configure the provider and optional supported request fields with `ocr config set`. Choose a model from `ocr llm models` or set an explicit model slug:
+
+```bash
+ocr auth login --provider chatgpt
+ocr config set provider chatgpt
+ocr config set providers.chatgpt.model <model-slug>
+ocr config set providers.chatgpt.extra_body '{"reasoning":{"effort":"low"}}'
+ocr llm test
+```
+
+The provider accepts explicit model values even if the account-specific catalog omits them. It accepts `extra_body` fields `reasoning`, `text` and `prompt_cache_key`; it rejects endpoint, protocol and credential overrides.
+
 ### Overriding a built-in provider's Base URL
 
 HTTP providers have a preset Base URL (shown in the table above).
 To point a built-in provider at a different endpoint — for example a
 self-hosted LiteLLM gateway that is rarely at the preset default
 `http://localhost:4000/v1` — set `providers.<name>.url`:
+
+The `chatgpt` preview is an exception: its public endpoint is fixed and URL overrides are rejected.
 
 ```bash
 ocr config set provider                   litellm
@@ -94,18 +121,24 @@ preset default — so you only need to set it when your endpoint differs.
 OAuth credentials stay in the provider's official credential store. OCR saves
 the provider and model selection and lets the official runtime refresh
 credentials. The provider picker skips API-key entry for these providers.
+`ocr auth` defaults to the `chatgpt` provider, so select these providers with
+`--provider`. The ChatGPT registration flags `--account`, `--new-account`,
+`--enable-plan` and `--no-browser` are rejected for them.
 
 For **Codex with a ChatGPT account**, install the
 [official Codex CLI](https://learn.chatgpt.com/docs/quickstart), then run:
 
 ```bash
-ocr auth login codex-oauth
+ocr auth login --provider codex-oauth
 ocr config set provider codex-oauth
 ocr config set providers.codex-oauth.model gpt-6.1-sol
 ocr llm test
 ```
 
-Use `ocr auth login codex-oauth --headless` for device authentication.
+Use `ocr auth login --provider codex-oauth --device` for device authentication.
+Unlike the `chatgpt` preview, which signs in through OCR's own Sign in with
+ChatGPT flow and calls the public Responses API, `codex-oauth` reuses the
+Codex CLI login and runs requests through Codex.
 `OCR_CODEX_PATH` can select an absolute Codex executable path. OCR uses the
 [official app-server protocol](https://learn.chatgpt.com/docs/app-server),
 including experimental dynamic tools and history injection; use a current
@@ -140,7 +173,7 @@ For **Claude with a Claude / Claude Code subscription**, install the
 [official Claude Code CLI](https://code.claude.com/docs/en/setup), then run:
 
 ```bash
-ocr auth login anthropic-oauth
+ocr auth login --provider anthropic-oauth
 ocr config set provider anthropic-oauth
 ocr config set providers.anthropic-oauth.model sonnet
 ocr llm test
@@ -151,8 +184,9 @@ subscription login is reused. `OCR_CLAUDE_PATH` can select an absolute Claude
 executable path, and `CLAUDE_CONFIG_DIR` selects its configuration directory.
 Claude Code owns authentication and credential refresh. API-key, static token,
 and third-party endpoint environment variables do not override this provider.
-Claude Code has no `--headless` login flag; follow the URL/code instructions
-from its normal login command when browser launch is unavailable.
+`--device` applies only to Codex: Claude Code has no device login flag, so
+follow the URL/code instructions from its normal login command when browser
+launch is unavailable.
 
 OCR uses the documented
 [print-mode subprocess interface](https://code.claude.com/docs/en/headless)
@@ -173,8 +207,8 @@ says SDK, `claude -p`, and third-party app usage continue to draw from
 subscription limits. Account access and organization policy determine which
 models are available. Choose `sonnet`, `opus`, or an account-supported model ID.
 
-Use `ocr auth status <provider>` and `ocr auth logout <provider>` to inspect or
-clear the official login. These commands operate on the provider's selected
+Use `ocr auth status --provider <provider>` and
+`ocr auth logout --provider <provider>` to inspect or clear the official login. These commands operate on the provider's selected
 credential store, which is also shared with its CLI. Authentication status
 reports the local login; it is not a connectivity test.
 Use `ocr llm test` to verify inference. Login commands require user interaction;
@@ -293,6 +327,16 @@ in the FAQ before picking one.
 
 ### Timeouts
 
+Task and request timeouts are independent:
+
+- `ocr review --timeout` and `ocr scan --timeout` set the concurrent-task
+  budget in **minutes** (default **15**; `0` disables the task deadline).
+  This budget includes all LLM calls, tool work, and retry waits for the task.
+  Review scales it by the number of effort rounds.
+- The per-request HTTP timeout is in **seconds** (default **300**).
+  Raising `--timeout` does not change it; disabling the task deadline does
+  not disable request timeouts. A shorter remaining task budget always wins.
+
 Each LLM request has an HTTP timeout, defaulting to **300 seconds**.
 Slow local models (or large files) can need more. Three knobs, in
 increasing scope:
@@ -312,6 +356,25 @@ Both `timeout_sec` keys can be set with `ocr config set`:
   }
 }
 ```
+
+For example, `OCR_LLM_TIMEOUT=900 ocr review --timeout 30` allows an
+individual request up to 15 minutes within the task budget. Without the
+environment variable or a configured `timeout_sec`, requests still time
+out after 5 minutes even with `--timeout 30`.
+
+An expired per-request deadline ends the call without automatically replaying
+it, including when reading a response body or stream. For consistently slow
+requests, increase the request timeout rather than retrying with the same
+limit. The existing SDK retry policy is unchanged: retryable connection and
+HTTP failures use up to 5 retries with backoff and provider `Retry-After`
+hints. The SDK's per-attempt deadline also bounds its retry wait. Cancellation
+or an exhausted task deadline stops both requests and retry waits.
+
+Diagnostics distinguish `LLM request timeout` (check `OCR_LLM_TIMEOUT` or
+provider `timeout_sec`) from `caller deadline exceeded`, which means the
+calling operation's context has expired. For a review/scan task deadline,
+check `--timeout`; other operations, such as background memory compression
+and `ocr llm test`, have their own deadlines.
 
 ### API key from a command
 

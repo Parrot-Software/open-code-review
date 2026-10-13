@@ -224,7 +224,7 @@ func claudeSubscriptionStatus(ctx context.Context, path string, env []string) er
 		AuthMethod string `json:"authMethod"`
 	}
 	if err != nil || json.Unmarshal(output.Bytes(), &status) != nil || !status.LoggedIn || status.AuthMethod != "claude.ai" {
-		return fmt.Errorf("Claude subscription login required; run 'ocr auth login anthropic-oauth' (uses 'claude auth login --claudeai')")
+		return fmt.Errorf("Claude subscription login required; run 'ocr auth login --provider anthropic-oauth' (uses 'claude auth login --claudeai')")
 	}
 	return nil
 }
