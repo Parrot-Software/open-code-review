@@ -4,6 +4,7 @@
 package llm
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -454,13 +455,16 @@ func TestProviders_AllProtocolsCanonical(t *testing.T) {
 }
 
 func TestLookupProvider_OAuthDetails(t *testing.T) {
-	for _, name := range []string{ProtocolCodexOAuth, ProtocolAnthropicOAuth} {
+	for name, models := range map[string][]string{
+		ProtocolCodexOAuth:     {"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"},
+		ProtocolAnthropicOAuth: {"sonnet", "opus", "claude-opus-5-5", "claude-sonnet-5-5"},
+	} {
 		t.Run(name, func(t *testing.T) {
 			provider, ok := LookupProvider(name)
 			if !ok {
 				t.Fatalf("provider %q was not found", name)
 			}
-			if provider.Protocol != name || !provider.AmbientAuth || provider.BaseURL != "" || provider.EnvVar != "" || len(provider.Models) == 0 {
+			if provider.Protocol != name || !provider.AmbientAuth || provider.BaseURL != "" || provider.EnvVar != "" || !slices.Equal(provider.Models, models) {
 				t.Fatalf("unexpected OAuth provider: %+v", provider)
 			}
 			for _, model := range provider.Models {

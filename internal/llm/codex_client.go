@@ -35,6 +35,19 @@ type codexSession struct {
 	tools      []ToolDef
 	model      string
 	toolChoice string
+	// Codex can publish an inference's usage after OCR has returned that
+	// inference's tool calls, so completions report the growth of the thread's
+	// cumulative total rather than the latest per-inference value.
+	usageTotal    codexTokenUsage
+	usageReported codexTokenUsage
+}
+
+type codexTokenUsage struct {
+	Input      int64 `json:"inputTokens"`
+	Output     int64 `json:"outputTokens"`
+	Cached     int64 `json:"cachedInputTokens"`
+	CacheWrite int64 `json:"cacheWriteInputTokens"`
+	Total      int64 `json:"totalTokens"`
 }
 
 func NewCodexOAuthClient(cfg ClientConfig) *CodexOAuthClient {
@@ -230,22 +243,26 @@ func parseCodexToolCall(packet codexPacket, req ChatRequest, session *codexSessi
 	return ToolCall{}, fmt.Errorf("Codex requested an invalid or unavailable OCR tool")
 }
 
-func parseCodexUsage(packet codexPacket) (*UsageInfo, error) {
+func (session *codexSession) recordUsage(packet codexPacket) error {
 	var event struct {
 		TokenUsage struct {
-			Last struct {
-				Input  int64 `json:"inputTokens"`
-				Output int64 `json:"outputTokens"`
-				Cached int64 `json:"cachedInputTokens"`
-				Total  int64 `json:"totalTokens"`
-			} `json:"last"`
+			Total codexTokenUsage `json:"total"`
 		} `json:"tokenUsage"`
 	}
 	if err := json.Unmarshal(packet.Params, &event); err != nil {
-		return nil, err
+		return err
 	}
-	u := event.TokenUsage.Last
-	return &UsageInfo{PromptTokens: u.Input, CompletionTokens: u.Output, CacheReadTokens: u.Cached, TotalTokens: u.Total}, nil
+	session.usageTotal = event.TokenUsage.Total
+	return nil
+}
+
+func (session *codexSession) unreportedUsage() *UsageInfo {
+	total, reported := session.usageTotal, session.usageReported
+	if total == reported {
+		return nil
+	}
+	session.usageReported = total
+	return &UsageInfo{PromptTokens: total.Input - reported.Input, CompletionTokens: total.Output - reported.Output, CacheReadTokens: total.Cached - reported.Cached, CacheWriteTokens: total.CacheWrite - reported.CacheWrite, TotalTokens: total.Total - reported.Total}
 }
 
 func (c *CodexOAuthClient) CompletionsWithCtx(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
@@ -537,7 +554,6 @@ func readCodexTurn(ctx context.Context, rpc *codexRPC, req ChatRequest, model st
 	var textParts []string
 	var finalParts []string
 	var toolCalls []ToolCall
-	var usage *UsageInfo
 	for {
 		p, err := rpc.event(ctx)
 		if err != nil {
@@ -577,8 +593,7 @@ func readCodexTurn(ctx context.Context, rpc *codexRPC, req ChatRequest, model st
 					continue
 				}
 				if next.Method == "thread/tokenUsage/updated" {
-					usage, err = parseCodexUsage(next)
-					if err != nil {
+					if err := session.recordUsage(next); err != nil {
 						return nil, err
 					}
 					continue
@@ -586,7 +601,7 @@ func readCodexTurn(ctx context.Context, rpc *codexRPC, req ChatRequest, model st
 				rpc.pending = append(rpc.pending, next)
 			}
 			content := strings.Join(textParts, "\n")
-			return &ChatResponse{Model: model, Usage: usage, Choices: []Choice{{FinishReason: "tool_calls", Message: ResponseMessage{Role: "assistant", Content: &content, ToolCalls: toolCalls}}}}, nil
+			return &ChatResponse{Model: model, Usage: session.unreportedUsage(), Choices: []Choice{{FinishReason: "tool_calls", Message: ResponseMessage{Role: "assistant", Content: &content, ToolCalls: toolCalls}}}}, nil
 		case "item/completed":
 			var event struct {
 				Item struct {
@@ -605,8 +620,7 @@ func readCodexTurn(ctx context.Context, rpc *codexRPC, req ChatRequest, model st
 				}
 			}
 		case "thread/tokenUsage/updated":
-			usage, err = parseCodexUsage(p)
-			if err != nil {
+			if err := session.recordUsage(p); err != nil {
 				return nil, err
 			}
 		case "turn/completed":
@@ -627,7 +641,9 @@ func readCodexTurn(ctx context.Context, rpc *codexRPC, req ChatRequest, model st
 				}
 				return nil, fmt.Errorf("Codex turn %s", event.Turn.Status)
 			}
-			if req.ToolChoice == "required" && len(session.callIDs) == 0 {
+			// Tool calls end a completion early, so reaching the end of the turn
+			// means this completion made none, even if a retained session did.
+			if req.ToolChoice == "required" {
 				return nil, fmt.Errorf("Codex did not invoke the required OCR tool")
 			}
 			if len(finalParts) > 0 {
@@ -637,7 +653,7 @@ func readCodexTurn(ctx context.Context, rpc *codexRPC, req ChatRequest, model st
 			if strings.TrimSpace(content) == "" {
 				return nil, fmt.Errorf("Codex completed without an assistant response")
 			}
-			return &ChatResponse{Model: model, Usage: usage, Choices: []Choice{{FinishReason: "stop", Message: ResponseMessage{Role: "assistant", Content: &content}}}}, nil
+			return &ChatResponse{Model: model, Usage: session.unreportedUsage(), Choices: []Choice{{FinishReason: "stop", Message: ResponseMessage{Role: "assistant", Content: &content}}}}, nil
 		default:
 			if len(p.ID) > 0 {
 				return nil, fmt.Errorf("unexpected Codex server request %q", p.Method)

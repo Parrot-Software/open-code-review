@@ -39,10 +39,26 @@ func fakeCodexServer(mode string) {
 	notify := func(method string, params any) {
 		_ = encoder.Encode(map[string]any{"method": method, "params": params})
 	}
+	notifyUsage := func(total, last map[string]any) {
+		notify("thread/tokenUsage/updated", map[string]any{"tokenUsage": map[string]any{"total": total, "last": last}})
+	}
+	firstUsage := map[string]any{"inputTokens": 10, "outputTokens": 5, "cachedInputTokens": 3, "totalTokens": 15}
 	for {
 		var p codexPacket
 		if decoder.Decode(&p) != nil {
 			return
+		}
+		if p.Method == "" && mode == "late-usage" {
+			// The first inference's usage arrives only after OCR has returned its
+			// tool call, and the final cumulative usage is published twice.
+			secondUsage := map[string]any{"inputTokens": 12, "outputTokens": 4, "cachedInputTokens": 6, "totalTokens": 16}
+			bothUsage := map[string]any{"inputTokens": 22, "outputTokens": 9, "cachedInputTokens": 9, "totalTokens": 31}
+			notifyUsage(firstUsage, firstUsage)
+			notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review complete", "phase": "final_answer"}})
+			notifyUsage(bothUsage, secondUsage)
+			notifyUsage(bothUsage, secondUsage)
+			notify("turn/completed", map[string]any{"turn": map[string]any{"status": "completed"}})
+			continue
 		}
 		if p.Method == "" && (mode == "tool" || mode == "multi-tool" || mode == "sequential-tool") {
 			toolResults++
@@ -67,7 +83,7 @@ func fakeCodexServer(mode string) {
 				}
 			}
 			if toolResults == wantResults {
-				notify("thread/tokenUsage/updated", map[string]any{"tokenUsage": map[string]any{"last": map[string]any{"inputTokens": 10, "outputTokens": 5, "cachedInputTokens": 3, "totalTokens": 15}}})
+				notifyUsage(firstUsage, firstUsage)
 				notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review complete", "phase": "final_answer"}})
 				notify("turn/completed", map[string]any{"turn": map[string]any{"status": "completed"}})
 			}
@@ -125,7 +141,7 @@ func fakeCodexServer(mode string) {
 				fmt.Fprintln(os.Stdout, "invalid-json")
 				return
 			}
-			if mode == "tool" || mode == "multi-tool" || mode == "sequential-tool" || mode == "unknown-tool" {
+			if mode == "tool" || mode == "multi-tool" || mode == "sequential-tool" || mode == "late-usage" || mode == "unknown-tool" {
 				name := "search_code"
 				if mode == "unknown-tool" {
 					name = "unavailable"
@@ -142,7 +158,7 @@ func fakeCodexServer(mode string) {
 			}
 			notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review progress", "phase": "commentary"}})
 			notify("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "text": "review complete", "phase": "final_answer"}})
-			notify("thread/tokenUsage/updated", map[string]any{"tokenUsage": map[string]any{"last": map[string]any{"inputTokens": 10, "outputTokens": 5, "cachedInputTokens": 3, "totalTokens": 15}}})
+			notifyUsage(firstUsage, firstUsage)
 			respond(p, map[string]any{"turn": map[string]any{"id": "turn-test"}})
 			status := "completed"
 			if mode == "failed" {
@@ -248,6 +264,47 @@ func TestCodexOAuthContinuesRetainedSession(t *testing.T) {
 	defer client.mu.Unlock()
 	if len(client.sessions) != 0 || !retained.closed {
 		t.Fatal("expected the completed Codex session to be discarded")
+	}
+}
+
+func TestCodexOAuthReportsUsagePublishedAfterToolCalls(t *testing.T) {
+	fakeOAuthExecutable(t, "late-usage")
+	req := ChatRequest{Messages: []Message{{Role: "system", Content: "Review code"}, {Role: "user", Content: "Find bugs"}}, Tools: []ToolDef{{Function: FunctionDef{Name: "search_code", Parameters: map[string]any{"type": "object"}}}}}
+	client := NewCodexOAuthClient(ClientConfig{Model: "test-model"})
+	resp, err := client.CompletionsWithCtx(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 || resp.Usage != nil {
+		t.Fatalf("unexpected tool-call response: %+v", resp)
+	}
+	req.Messages = append(req.Messages, Message{Role: "assistant", ToolCalls: calls}, Message{Role: "tool", ToolCallID: calls[0].ID, Content: "result-of-" + calls[0].ID})
+	final, err := client.CompletionsWithCtx(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := UsageInfo{PromptTokens: 22, CompletionTokens: 9, CacheReadTokens: 9, TotalTokens: 31}
+	if final.Usage == nil || *final.Usage != want {
+		t.Fatalf("usage = %+v, want both inferences counted once: %+v", final.Usage, want)
+	}
+}
+
+func TestCodexOAuthRequiresToolCallInEachCompletion(t *testing.T) {
+	fakeOAuthExecutable(t, "tool")
+	req := ChatRequest{Messages: []Message{{Role: "system", Content: "Review code"}, {Role: "user", Content: "Find bugs"}}, Tools: []ToolDef{{Function: FunctionDef{Name: "search_code", Parameters: map[string]any{"type": "object"}}}}, ToolChoice: "required"}
+	client := NewCodexOAuthClient(ClientConfig{Model: "test-model"})
+	resp, err := client.CompletionsWithCtx(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("unexpected first response: %+v", resp)
+	}
+	req.Messages = append(req.Messages, Message{Role: "assistant", ToolCalls: calls}, Message{Role: "tool", ToolCallID: calls[0].ID, Content: "result-of-" + calls[0].ID})
+	if _, err := client.CompletionsWithCtx(context.Background(), req); err == nil || !strings.Contains(err.Error(), "did not invoke the required OCR tool") {
+		t.Fatalf("retained text-only completion error = %v", err)
 	}
 }
 
