@@ -165,7 +165,7 @@ func (c *ClaudeOAuthClient) CompletionsWithCtx(ctx context.Context, req ChatRequ
 			CacheWrite int64 `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+	if err := json.Unmarshal(output.buffer.Bytes(), &result); err != nil {
 		if runErr != nil {
 			return nil, fmt.Errorf("Claude Code invocation failed (use a current CLI): %w", runErr)
 		}
@@ -223,17 +223,17 @@ func claudeSubscriptionStatus(ctx context.Context, path string, env []string) er
 		LoggedIn   bool   `json:"loggedIn"`
 		AuthMethod string `json:"authMethod"`
 	}
-	if err != nil || json.Unmarshal(output.Bytes(), &status) != nil || !status.LoggedIn || status.AuthMethod != "claude.ai" {
+	if err != nil || json.Unmarshal(output.buffer.Bytes(), &status) != nil || !status.LoggedIn || status.AuthMethod != "claude.ai" {
 		return fmt.Errorf("Claude subscription login required; run 'ocr auth login --provider anthropic-oauth' (uses 'claude auth login --claudeai')")
 	}
 	return nil
 }
 
-type claudeOutputBuffer struct{ bytes.Buffer }
+type claudeOutputBuffer struct{ buffer bytes.Buffer }
 
 func (b *claudeOutputBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > 32*1024*1024 {
+	if b.buffer.Len()+len(p) > 32*1024*1024 {
 		return 0, fmt.Errorf("Claude Code output exceeds 32 MiB")
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }

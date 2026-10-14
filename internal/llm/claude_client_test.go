@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,6 +25,11 @@ func fakeClaudeClient(mode string) {
 		}
 	}
 	if os.Args[1] == "auth" {
+		if mode == "claude-auth-oversized" {
+			if !writeClaudeTestPadding() {
+				return
+			}
+		}
 		if mode == "claude-auth-error" {
 			fmt.Fprintln(os.Stdout, "bad-json")
 			return
@@ -78,6 +84,9 @@ func fakeClaudeClient(mode string) {
 		fmt.Fprintln(os.Stdout, "bad-json")
 		return
 	}
+	if mode == "claude-output-oversized" && !writeClaudeTestPadding() {
+		return
+	}
 	decision := map[string]any{"content": "review complete", "tool_calls": []any{}}
 	if mode == "claude-tool" || mode == "claude-unknown-tool" || mode == "claude-invalid-arguments" {
 		name, arguments := "search_code", `{"query":"auth"}`
@@ -102,6 +111,50 @@ func fakeClaudeClient(mode string) {
 	_ = json.NewEncoder(os.Stdout).Encode(result)
 	if mode == "claude-cli-error" {
 		os.Exit(1)
+	}
+}
+
+func writeClaudeTestPadding() bool {
+	padding := bytes.Repeat([]byte(" "), 1024*1024)
+	for range 33 {
+		if _, err := os.Stdout.Write(padding); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func TestClaudeOutputBufferSubprocessLimit(t *testing.T) {
+	fakeOAuthExecutable(t, "claude-auth-oversized")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "auth", "status", "--json")
+	cmd.Env = oauthEnvironment()
+	output := &claudeOutputBuffer{}
+	cmd.Stdout, cmd.Stderr = output, io.Discard
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("subprocess error = %v, retained %d bytes", err, output.buffer.Len())
+	}
+	if output.buffer.Len() > 32*1024*1024 {
+		t.Fatalf("retained %d bytes, limit is 32 MiB", output.buffer.Len())
+	}
+}
+
+func TestClaudeOutputBufferLimit(t *testing.T) {
+	output := &claudeOutputBuffer{}
+	padding := bytes.Repeat([]byte(" "), 32*1024*1024)
+	if n, err := output.Write(padding); err != nil || n != len(padding) {
+		t.Fatalf("write at limit = %d, %v", n, err)
+	}
+	if n, err := output.Write([]byte(" ")); n != 0 || err == nil || !strings.Contains(err.Error(), "output exceeds 32 MiB") {
+		t.Fatalf("write beyond limit = %d, %v", n, err)
+	}
+	if output.buffer.Len() != len(padding) {
+		t.Fatalf("retained %d bytes, want %d", output.buffer.Len(), len(padding))
 	}
 }
 
@@ -152,6 +205,7 @@ func TestClaudeOAuthRoundTrip(t *testing.T) {
 func TestClaudeOAuthFailures(t *testing.T) {
 	for _, tc := range []struct{ mode, want string }{
 		{"claude-api-key", "subscription login required"}, {"claude-signed-out", "subscription login required"}, {"claude-auth-error", "subscription login required"},
+		{"claude-auth-oversized", "subscription login required"}, {"claude-output-oversized", "Claude Code invocation failed"},
 		{"claude-malformed", "decode Claude Code result"}, {"claude-cli-error", "test service error"}, {"claude-unknown-tool", "unavailable OCR tool"},
 		{"claude-invalid-arguments", "unavailable OCR tool"}, {"claude-empty", "without an assistant"}, {"claude-missing-decision", "no structured assistant"},
 	} {
