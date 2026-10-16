@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 alibaba/open-code-review Contributors
+// Modified by Parrot Software (fork): unattended OAuth mode via OCR_CLAUDE_UNATTENDED.
+// See git log for the full change; original work Apache-2.0, alibaba/open-code-review.
 
 package llm
 

@@ -1,3 +1,5 @@
+# Modified by Parrot Software (fork): release-binary install (ocr_release_*) and
+# `provider` input. See git log; original work Apache-2.0, alibaba/open-code-review.
 name: OpenCodeReview PR Review
 description: >-
   AI-powered GitHub PR review with inline comments, sticky summary, and

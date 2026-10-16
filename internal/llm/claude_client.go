@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 alibaba/open-code-review Contributors
+// Modified by Parrot Software (fork): accepts the oauth_token auth method in unattended mode.
+// See git log for the full change; original work Apache-2.0, alibaba/open-code-review.
 
 package llm
 
