@@ -34,6 +34,11 @@ func oauthEnvironment() []string {
 		"CLAUDE_CODE_USE_BEDROCK": true, "CLAUDE_CODE_USE_VERTEX": true,
 		"CLAUDE_CODE_USE_FOUNDRY": true, "CLAUDE_CODE_SIMPLE": true,
 	}
+	// Unattended mode (CI): the Claude Code OAuth token comes from the
+	// environment instead of an interactive login, so it must reach the CLI.
+	if claudeUnattended() {
+		delete(blocked, "CLAUDE_CODE_OAUTH_TOKEN")
+	}
 	var env []string
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
@@ -42,6 +47,17 @@ func oauthEnvironment() []string {
 		}
 	}
 	return env
+}
+
+// claudeUnattended reports whether OCR_CLAUDE_UNATTENDED opts into using a
+// CLAUDE_CODE_OAUTH_TOKEN from the environment (headless runners) rather than
+// the interactive Claude Code login.
+func claudeUnattended() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("OCR_CLAUDE_UNATTENDED"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 func RunOAuthAuth(ctx context.Context, provider, action string, stdin io.Reader, stdout, stderr io.Writer) error {

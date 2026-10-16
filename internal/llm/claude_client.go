@@ -234,10 +234,21 @@ func claudeSubscriptionStatus(ctx context.Context, path string, env []string) er
 		LoggedIn   bool   `json:"loggedIn"`
 		AuthMethod string `json:"authMethod"`
 	}
-	if err != nil || json.Unmarshal(output.buffer.Bytes(), &status) != nil || !status.LoggedIn || status.AuthMethod != "claude.ai" {
+	if err != nil || json.Unmarshal(output.buffer.Bytes(), &status) != nil || !status.LoggedIn {
 		return fmt.Errorf("Claude subscription login required; run 'ocr auth login --provider anthropic-oauth' (uses 'claude auth login --claudeai')")
 	}
-	return nil
+	switch status.AuthMethod {
+	case "claude.ai":
+		return nil
+	case "oauth_token":
+		// Reported when the CLI authenticates with CLAUDE_CODE_OAUTH_TOKEN; only
+		// accepted when unattended mode let that variable through.
+		if claudeUnattended() {
+			return nil
+		}
+		return fmt.Errorf("Claude Code is using CLAUDE_CODE_OAUTH_TOKEN from the environment; set OCR_CLAUDE_UNATTENDED=1 to allow it, or run 'ocr auth login --provider anthropic-oauth'")
+	}
+	return fmt.Errorf("Claude subscription login required (auth method %q); run 'ocr auth login --provider anthropic-oauth' (uses 'claude auth login --claudeai')", status.AuthMethod)
 }
 
 type claudeOutputBuffer struct{ buffer bytes.Buffer }
