@@ -1,0 +1,52 @@
+# Parrot-only release: builds linux/amd64 from this fork for CI consumption.
+# Upstream's release.yml needs Alibaba's self-hosted runners and npm OIDC, so it
+# is left untouched (and disabled in this fork); this one publishes a single
+# binary plus its sha256 as a GitHub pre-release. Delete together with the fork
+# once alibaba/open-code-review#1670 ships in an official release.
+name: Release (Parrot, linux/amd64)
+
+on:
+  push:
+    tags: ['v*-parrot.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Same ldflags as upstream so `ocr version` reports the tag and commit.
+      - name: Build linux/amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          go build -ldflags "-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildDate=${BUILD_DATE}" \
+            -o opencodereview-linux-amd64 ./cmd/opencodereview
+          sha256sum opencodereview-linux-amd64 > sha256sum.txt
+          ./opencodereview-linux-amd64 version
+          cat sha256sum.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          files: |
+            opencodereview-linux-amd64
+            sha256sum.txt
+          body: |
+            Build of alibaba/open-code-review PR #1670 (`${{ github.sha }}`) for Parrot CI. linux/amd64 only.
+            Verify: `sha256sum -c sha256sum.txt`.
