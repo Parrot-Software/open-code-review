@@ -85,6 +85,31 @@ inputs:
     description: npm version spec for @alibaba-group/open-code-review (v1.9.6 or newer required).
     required: false
     default: latest
+  ocr_release_repo:
+    description: >-
+      GitHub repository whose release carries a prebuilt `opencodereview-linux-amd64`
+      and `sha256sum.txt`. When set together with ocr_release_tag the CLI is installed
+      from that release instead of npm (ocr_version is ignored).
+    required: false
+    default: ''
+  ocr_release_tag:
+    description: Release tag to download the CLI from (requires ocr_release_repo).
+    required: false
+    default: ''
+  ocr_sha256:
+    description: >-
+      Expected sha256 of the downloaded binary. When set, the install fails unless it
+      matches, in addition to the release's own sha256sum.txt check.
+    required: false
+    default: ''
+  provider:
+    description: >-
+      Named OCR provider to select instead of the llm_url/llm_auth_token path, e.g.
+      `anthropic-oauth` (uses the Claude Code CLI login; needs `claude` on PATH and
+      CLAUDE_CODE_OAUTH_TOKEN in the environment). When set, llm_url, llm_auth_token,
+      llm_protocol, llm_auth_header and llm_extra_body are ignored.
+    required: false
+    default: ''
   review_concurrency:
     description: Value passed to `ocr review --concurrency`.
     required: false
@@ -540,17 +565,46 @@ runs:
       shell: bash
       env:
         OCR_VERSION: ${{ inputs.ocr_version }}
+        OCR_RELEASE_REPO: ${{ inputs.ocr_release_repo }}
+        OCR_RELEASE_TAG: ${{ inputs.ocr_release_tag }}
+        OCR_SHA256: ${{ inputs.ocr_sha256 }}
+        GH_TOKEN: ${{ inputs.github_token }}
       run: |
-        npm install -g "@alibaba-group/open-code-review@${OCR_VERSION}"
-        echo "OpenCodeReview installed:"
+        if [ -n "$OCR_RELEASE_REPO" ] || [ -n "$OCR_RELEASE_TAG" ]; then
+          if [ -z "$OCR_RELEASE_REPO" ] || [ -z "$OCR_RELEASE_TAG" ]; then
+            echo "::error::ocr_release_repo and ocr_release_tag must be set together"
+            exit 1
+          fi
+          # Prebuilt binary from a GitHub release: verified against the release's
+          # sha256sum.txt and, when given, against the pinned ocr_sha256.
+          BIN_DIR="$RUNNER_TEMP/ocr-bin"
+          mkdir -p "$BIN_DIR"
+          gh release download "$OCR_RELEASE_TAG" -R "$OCR_RELEASE_REPO" -D "$BIN_DIR" --clobber \
+            -p opencodereview-linux-amd64 -p sha256sum.txt
+          (cd "$BIN_DIR" && sha256sum -c sha256sum.txt)
+          ACTUAL_SHA="$(sha256sum "$BIN_DIR/opencodereview-linux-amd64" | cut -d' ' -f1)"
+          if [ -n "$OCR_SHA256" ] && [ "$ACTUAL_SHA" != "$OCR_SHA256" ]; then
+            echo "::error::Downloaded OpenCodeReview sha256 ${ACTUAL_SHA} does not match ocr_sha256 ${OCR_SHA256}"
+            exit 1
+          fi
+          install -m 755 "$BIN_DIR/opencodereview-linux-amd64" "$BIN_DIR/ocr"
+          echo "$BIN_DIR" >> "$GITHUB_PATH"
+          export PATH="$BIN_DIR:$PATH"
+          echo "OpenCodeReview installed from ${OCR_RELEASE_REPO}@${OCR_RELEASE_TAG} (sha256 ${ACTUAL_SHA}):"
+        else
+          npm install -g "@alibaba-group/open-code-review@${OCR_VERSION}"
+          echo "OpenCodeReview installed:"
+        fi
         OCR_VERSION_OUTPUT="$(ocr version 2>/dev/null)" || {
           echo "::error::Unable to read the installed OpenCodeReview version"
           exit 1
         }
         printf '%s\n' "$OCR_VERSION_OUTPUT"
         OCR_VERSION_LINE="${OCR_VERSION_OUTPUT%%$'\n'*}"
-        if [[ ! "$OCR_VERSION_LINE" =~ ^open-code-review[[:space:]]+v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?([[:space:]]|$) ]]; then
-          echo "::error::Unable to parse the installed OpenCodeReview version; a stable release v1.9.6 or newer is required (prerelease versions are not supported)"
+        # Fork: a pre-release suffix (v1.13.0-parrot.1) is accepted so release builds of
+        # this fork pass the floor check below.
+        if [[ ! "$OCR_VERSION_LINE" =~ ^open-code-review[[:space:]]+v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?([[:space:]]|$) ]]; then
+          echo "::error::Unable to parse the installed OpenCodeReview version; a release v1.9.6 or newer is required"
           exit 1
         fi
         OCR_VERSION_MAJOR=$((10#${BASH_REMATCH[1]}))
@@ -600,8 +654,19 @@ runs:
         OCR_LLM_AUTH_HEADER: ${{ inputs.llm_auth_header }}
         OCR_EXTRA_BODY: ${{ inputs.llm_extra_body }}
         OCR_LANGUAGE: ${{ inputs.language }}
+        OCR_PROVIDER: ${{ inputs.provider }}
       shell: bash
       run: |
+        if [ -n "$OCR_PROVIDER" ]; then
+          # Named provider (e.g. anthropic-oauth): credentials belong to the
+          # provider, so none of the llm.* URL/token settings apply. The model
+          # still comes from llm_model so routing stays in the caller's hands.
+          ocr config set provider "$OCR_PROVIDER"
+          ocr config set "providers.${OCR_PROVIDER}.model" "$OCR_LLM_MODEL"
+          ocr config set language "$OCR_LANGUAGE"
+          echo "OCR_LLM_PROTOCOL_EXPLICIT=provider:${OCR_PROVIDER}" >> "$GITHUB_ENV"
+          exit 0
+        fi
         # An explicit protocol wins over llm_use_anthropic: the input first,
         # then OCR_LLM_PROTOCOL inherited from the job or step environment.
         # Read it before the derivation below reuses that variable name.
