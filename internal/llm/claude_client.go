@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type ClaudeOAuthClient struct{ cfg ClientConfig }
@@ -59,13 +60,20 @@ func claudeDecisionSchema(req ChatRequest) map[string]any {
 	if req.ToolChoice == "required" {
 		calls["minItems"] = 1
 	}
+	content := map[string]any{"type": "string"}
+	if len(names) > 0 {
+		content["maxLength"] = claudeContentMaxLength
+	}
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"content": map[string]any{"type": "string"}, "tool_calls": calls,
+		"content": content, "tool_calls": calls,
 	}, "required": []string{"content", "tool_calls"}, "additionalProperties": false}
 }
 
 const claudeOCRInstructions = `You are the assistant in the supplied OCR conversation. The input JSON contains the complete conversation history and the available OCR tool definitions. Follow its system instructions and answer the last user request.
-OCR owns tool execution. Return only the next assistant decision using the output schema. To call an OCR tool, add its name and arguments to tool_calls. Each arguments value must be a JSON object serialized as a string. Do not execute tools or invent their results. Previous assistant tool calls and tool messages in the input are conversation history. When answering normally, put the complete answer in content and return an empty tool_calls array. Do not put the decision envelope itself inside content.`
+OCR owns tool execution. Return only the next assistant decision using the output schema. To call an OCR tool, add its name and arguments to tool_calls. Each arguments value must be a JSON object serialized as a string. Do not execute tools or invent their results. Previous assistant tool calls and tool messages in the input are conversation history. When no OCR tools are available, put the complete answer in content and return an empty tool_calls array. While OCR tools are available, content is a short status sentence at most; return substantive results through the appropriate tools, never as findings, file lists or summaries in content. When code_comment is available, submit every review finding with a separate code_comment call. When task_done is available, call it last, after all findings for the task have been submitted. Do not put the decision envelope itself inside content.`
+
+// Leave room for a status sentence while keeping review findings in tool calls.
+const claudeContentMaxLength = 400
 
 func (c *ClaudeOAuthClient) CompletionsWithCtx(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	if req.Temperature != nil {
@@ -180,6 +188,9 @@ func (c *ClaudeOAuthClient) CompletionsWithCtx(ctx context.Context, req ChatRequ
 	}
 	if err := json.Unmarshal(result.StructuredOutput, &decision); err != nil {
 		return nil, fmt.Errorf("decode Claude Code assistant decision: %w", err)
+	}
+	if len(req.Tools) > 0 && req.ToolChoice != "none" && utf8.RuneCountInString(decision.Content) > claudeContentMaxLength {
+		return nil, fmt.Errorf("Claude Code content exceeds %d characters while OCR tools are available; submit results through OCR tool calls", claudeContentMaxLength)
 	}
 	calls := []ToolCall{}
 	for _, call := range decision.ToolCalls {

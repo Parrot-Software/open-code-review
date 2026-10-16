@@ -76,6 +76,23 @@ func fakeClaudeClient(mode string) {
 	if mode == "claude-none" && len(request.Tools) > 0 {
 		os.Exit(36)
 	}
+	var schema struct {
+		Properties map[string]struct {
+			MaxLength *int `json:"maxLength"`
+		} `json:"properties"`
+	}
+	schemaJSON, ok := flag("--json-schema")
+	if !ok || json.Unmarshal([]byte(schemaJSON), &schema) != nil {
+		os.Exit(38)
+	}
+	limit := schema.Properties["content"].MaxLength
+	if len(request.Tools) > 0 {
+		if limit == nil || *limit != 400 {
+			os.Exit(38)
+		}
+	} else if limit != nil {
+		os.Exit(38)
+	}
 	if mode == "claude-timeout" {
 		time.Sleep(time.Minute)
 		return
@@ -100,6 +117,15 @@ func fakeClaudeClient(mode string) {
 	}
 	if mode == "claude-empty" {
 		decision["content"] = ""
+	}
+	if mode == "claude-prose-findings" {
+		decision["content"] = strings.Repeat("review.go:10: high: Untrusted input reaches the database query without validation. Use a parameterized query to prevent injection.\n", 6)
+		decision["tool_calls"] = []any{map[string]any{"name": "task_done", "arguments": `{}`}}
+	}
+	if mode == "claude-decision" {
+		if json.Unmarshal([]byte(os.Getenv("OCR_TEST_CLAUDE_DECISION")), &decision) != nil {
+			os.Exit(39)
+		}
 	}
 	result := map[string]any{"subtype": "success", "is_error": false, "structured_output": decision, "usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 2}}
 	if mode == "claude-missing-decision" {
@@ -199,6 +225,95 @@ func TestClaudeOAuthRoundTrip(t *testing.T) {
 				t.Fatalf("unexpected response: %+v", resp)
 			}
 		})
+	}
+}
+
+func TestClaudeOAuthRejectsFindingsInContent(t *testing.T) {
+	fakeOAuthExecutable(t, "claude-prose-findings")
+	req := claudeTestRequest()
+	req.ToolChoice = "required"
+	req.Tools = []ToolDef{
+		{Function: FunctionDef{Name: "code_comment", Parameters: map[string]any{"type": "object"}}},
+		{Function: FunctionDef{Name: "task_done", Parameters: map[string]any{"type": "object"}}},
+	}
+	resp, err := NewClaudeOAuthClient(ClientConfig{}).CompletionsWithCtx(context.Background(), req)
+	if err == nil {
+		t.Fatalf("accepted prose findings with task_done: content length %d, tool calls %+v", len(resp.Content()), resp.ToolCalls())
+	}
+	if !strings.Contains(err.Error(), "content exceeds 400 characters") {
+		t.Fatalf("error = %v, want content length rejection", err)
+	}
+}
+
+func TestClaudeOAuthContentLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, toolChoice string
+		noTools, wantError        bool
+	}{
+		{name: "status at limit", content: strings.Repeat("a", 400)},
+		{name: "status over limit", content: strings.Repeat("a", 401), wantError: true},
+		{name: "unicode at limit", content: strings.Repeat("\U0001f50d", 400)},
+		{name: "unicode over limit", content: strings.Repeat("\U0001f50d", 401), wantError: true},
+		{name: "no tools", content: strings.Repeat("a", 2240), noTools: true},
+		{name: "tools disabled", content: strings.Repeat("a", 2240), toolChoice: "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeOAuthExecutable(t, "claude-decision")
+			decision, err := json.Marshal(map[string]any{"content": tc.content, "tool_calls": []any{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OCR_TEST_CLAUDE_DECISION", string(decision))
+			req := claudeTestRequest()
+			req.ToolChoice = tc.toolChoice
+			if tc.noTools {
+				req.Tools = nil
+			}
+			resp, err := NewClaudeOAuthClient(ClientConfig{}).CompletionsWithCtx(context.Background(), req)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "content exceeds 400 characters") {
+					t.Fatalf("error = %v, want content length rejection", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Content() != tc.content {
+				t.Fatal("response content was altered")
+			}
+		})
+	}
+}
+
+func TestClaudeOAuthReviewToolCalls(t *testing.T) {
+	fakeOAuthExecutable(t, "claude-decision")
+	finding := strings.Repeat("Use a parameterized query to prevent injection. ", 50)
+	arguments, err := json.Marshal(map[string]any{"content": finding})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := json.Marshal(map[string]any{"content": "Review complete.", "tool_calls": []any{
+		map[string]any{"name": "code_comment", "arguments": string(arguments)},
+		map[string]any{"name": "task_done", "arguments": `{}`},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCR_TEST_CLAUDE_DECISION", string(decision))
+	req := claudeTestRequest()
+	req.ToolChoice = "required"
+	req.Tools = []ToolDef{
+		{Function: FunctionDef{Name: "code_comment", Parameters: map[string]any{"type": "object"}}},
+		{Function: FunctionDef{Name: "task_done", Parameters: map[string]any{"type": "object"}}},
+	}
+	resp, err := NewClaudeOAuthClient(ClientConfig{}).CompletionsWithCtx(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 2 || calls[0].Function.Name != "code_comment" || calls[0].Function.Arguments != string(arguments) || calls[1].Function.Name != "task_done" {
+		t.Fatalf("review tool calls were altered: %+v", calls)
 	}
 }
 
